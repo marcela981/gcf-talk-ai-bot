@@ -1,0 +1,8 @@
+# nc_py_api[app] pulls in FastAPI + uvicorn[standard] for the ExApp runtime.
+nc_py_api[app]>=0.21.0
+
+# OpenAI SDK — wired into services/llm_client.py for Week 2.
+openai>=1.40.0
+
+# Local dev convenience: load .env when running outside the AppAPI container.
+python-dotenv>=1.0.0

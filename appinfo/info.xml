@@ -1,0 +1,38 @@
+<?xml version="1.0"?>
+<info xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:noNamespaceSchemaLocation="https://apps.nextcloud.com/schema/apps/info.xsd">
+    <id>gcf_talk_ai_bot</id>
+    <name>GCF Talk AI Bot</name>
+    <summary>AI-powered chat bot for Nextcloud Talk using OpenAI ChatGPT.</summary>
+    <description><![CDATA[
+        External App (ExApp) that registers a Nextcloud Talk bot which replies
+        to user messages using OpenAI's ChatGPT. The Week 1 release is a
+        proof-of-concept that replies "pong" to "ping" while validating the
+        HMAC-SHA256 signatures of every Talk webhook. The LLM integration
+        lands in Week 2.
+    ]]></description>
+    <version>0.1.0</version>
+    <licence>agpl</licence>
+    <author mail="gcf@example.com" homepage="https://example.com">GCF Team</author>
+    <namespace>GCFTalkAiBot</namespace>
+    <category>integration</category>
+    <bugs>https://github.com/your-org/gcf-talk-ai-bot/issues</bugs>
+
+    <dependencies>
+        <nextcloud min-version="28" max-version="31"/>
+    </dependencies>
+
+    <!-- AppAPI-specific section: how to deploy the container and what scopes
+         the ExApp needs. TALK_BOT is the scope required to register and
+         receive chat events from the Talk app. -->
+    <external-app>
+        <docker-install>
+            <registry>ghcr.io</registry>
+            <image>your-org/gcf-talk-ai-bot</image>
+            <image-tag>latest</image-tag>
+        </docker-install>
+        <scopes>
+            <value>TALK_BOT</value>
+        </scopes>
+    </external-app>
+</info>
