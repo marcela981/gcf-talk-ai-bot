@@ -25,8 +25,10 @@ from nc_py_api.ex_app import (
     set_handlers,
 )
 
+from app.adapters.openai_adapter import OpenAIAdapter
 from app.config import settings
 from app.handlers.talk_handler import handle_message
+from app.services.conversation_service import ConversationService
 
 
 logging.basicConfig(level=logging.INFO)
@@ -37,6 +39,18 @@ BOT = talk_bot.TalkBot(
     callback_url="/talk_bot",
     display_name=settings.bot_display_name,
     description=settings.bot_description,
+)
+
+# Built at import time. The adapter tolerates an empty api_key here and only
+# raises when `complete()` is actually invoked, so import never fails because
+# OPENAI_API_KEY is unset in some environments (e.g. CI, local checks).
+_adapter = OpenAIAdapter(
+    api_key=settings.openai_api_key,
+    default_model=settings.openai_model,
+)
+_service = ConversationService(
+    llm=_adapter,
+    bot_display_name=settings.bot_display_name,
 )
 
 
@@ -91,7 +105,7 @@ async def talk_bot_webhook(
 
     By the time the body of this function runs, the message is authenticated.
     """
-    await handle_message(message)
+    await handle_message(message, _service)
     return Response(status_code=200)
 
 
