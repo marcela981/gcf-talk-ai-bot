@@ -7,6 +7,20 @@ Wires together:
     `set_handlers`.
   * A Talk bot webhook with automatic HMAC-SHA256 signature verification
     through the `atalk_bot_msg` dependency.
+
+ASYNC MIGRATION (nc_py_api 0.30.x):
+  nc_py_api >= 0.30 deprecated the synchronous `TalkBot` / sync lifecycle
+  handlers. Under a FastAPI async `lifespan`, a *synchronous* enabled_handler
+  is not awaited correctly by `set_handlers`: AppAPI receives 200 OK for
+  `PUT /enabled` but the handler body (the `enable_bot` call that registers
+  the bot in Talk) never actually runs. The fix is to commit fully to the
+  async path:
+    * talk_bot.TalkBot          -> talk_bot.AsyncTalkBot
+    * def enabled_handler        -> async def enabled_handler
+    * BOT.enable_bot(nc)         -> await BOT.enable_bot(nc)
+    * NextcloudApp               -> AsyncNextcloudApp
+  The domain, services, adapters and utils layers are untouched — the
+  hexagonal architecture keeps this transport-layer bug contained to main.py.
 """
 from __future__ import annotations
 
@@ -17,7 +31,7 @@ from typing import Annotated
 from fastapi import Depends, FastAPI
 from fastapi.responses import Response
 
-from nc_py_api import NextcloudApp, talk_bot
+from nc_py_api import AsyncNextcloudApp, talk_bot
 from nc_py_api.ex_app import (
     AppAPIAuthMiddleware,
     atalk_bot_msg,
@@ -35,7 +49,9 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-BOT = talk_bot.TalkBot(
+# AsyncTalkBot is the 0.30.x replacement for the deprecated sync TalkBot.
+# Its enable_bot/disable_bot coroutines must be awaited (see enabled_handler).
+BOT = talk_bot.AsyncTalkBot(
     callback_url="/talk_bot",
     display_name=settings.bot_display_name,
     description=settings.bot_description,
@@ -54,19 +70,23 @@ _service = ConversationService(
 )
 
 
-def enabled_handler(enabled: bool, nc: NextcloudApp) -> str:
+async def enabled_handler(enabled: bool, nc: AsyncNextcloudApp) -> str:
     """Invoked by AppAPI when the operator enables or disables the ExApp.
 
     Registers (or unregisters) the bot with the Talk app so Nextcloud knows
     where to deliver chat webhooks. AppAPI expects an empty string on
     success or an error message on failure.
+
+    MUST be async: `set_handlers` awaits this handler. A sync version returns
+    control before `enable_bot` runs, leaving the ExApp [enabled] in AppAPI
+    but absent from `talk:bot:list`.
     """
     try:
         if enabled:
-            BOT.enable_bot(nc)
+            await BOT.enable_bot(nc)
             logger.info("Bot registered with Talk.")
         else:
-            BOT.disable_bot(nc)
+            await BOT.disable_bot(nc)
             logger.info("Bot unregistered from Talk.")
     except Exception as exc:
         logger.exception("enabled_handler failed")

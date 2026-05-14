@@ -1,7 +1,11 @@
 # nc_py_api[app] pulls in FastAPI + uvicorn[standard] for the ExApp runtime.
-nc_py_api[app]>=0.21.0
+# Pinned to 0.30.x: the async migration in app/main.py targets this API.
+# 0.31.x removes the deprecated sync TalkBot entirely and may shift APIs —
+# bump deliberately, not implicitly. An unpinned `>=0.21.0` is what pulled
+# 0.30.1 into the build and broke the sync enabled_handler.
+nc_py_api[app]>=0.30,<0.31
 
-# OpenAI SDK — wired into services/llm_client.py for Week 2.
+# OpenAI SDK — wired into adapters/openai_adapter.py.
 openai>=1.40.0
 
 # Local dev convenience: load .env when running outside the AppAPI container.
