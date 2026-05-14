@@ -19,7 +19,7 @@
     <bugs>https://github.com/your-org/gcf-talk-ai-bot/issues</bugs>
 
     <dependencies>
-        <nextcloud min-version="28" max-version="31"/>
+        <nextcloud min-version="28" max-version="32"/>
     </dependencies>
 
     <!-- AppAPI-specific section: how to deploy the container and what scopes
