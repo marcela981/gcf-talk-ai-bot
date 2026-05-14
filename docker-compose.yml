@@ -1,0 +1,67 @@
+# docker-compose.yml — GCF Talk AI Bot (ExApp, manual-install deploy)
+#
+# Deploy model: AppAPI's "manual-install" daemon. AppAPI does NOT build or
+# start this container — the operator does (docker compose up -d), then runs
+# `occ app_api:app:register` so AppAPI can reach /heartbeat, /init, /enabled.
+#
+# All secrets come from a sibling .env file (NOT committed — see .gitignore).
+# .env.example documents the required keys.
+
+services:
+  gcf-talk-ai-bot:
+    build: .
+    image: gcf-talk-ai-bot:latest
+    container_name: gcf-talk-ai-bot
+    restart: unless-stopped
+
+    # Joined to the shared stack network so the bot resolves
+    # `nextcloud-nextcloud-1` by DNS, and Talk/AppAPI reach the bot by
+    # its container_name. No `ports:` block on purpose — the bot is never
+    # published to the host; all traffic stays inside vps2DockerNet.
+    networks:
+      - vps2DockerNet
+
+    expose:
+      - "8080"
+
+    environment:
+      # --- Infra vars (AppAPI injects these in docker-install; here we
+      #     provide them ourselves because the daemon is manual-install) ---
+      - APP_ID=gcf_talk_ai_bot
+      - APP_VERSION=0.1.0
+      - APP_HOST=0.0.0.0
+      - APP_PORT=8080
+      - APP_SECRET=${APP_SECRET:?APP_SECRET is required - see .env}
+      - NEXTCLOUD_URL=http://nextcloud-nextcloud-1
+      # nc_py_api reads this; AppAPI normally sets it. Keep in sync with the
+      # AppAPI version reported by `occ app:list` (app_api: 32.0.0).
+      - AA_VERSION=32.0.0
+      - APP_PERSISTENT_STORAGE=/data
+
+      # --- Application vars (yours) ---
+      - OPENAI_API_KEY=${OPENAI_API_KEY:?OPENAI_API_KEY is required - see .env}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+      - BOT_DISPLAY_NAME=${BOT_DISPLAY_NAME:-GCF AI Bot}
+      - BOT_DESCRIPTION=${BOT_DESCRIPTION:-AI-powered assistant using OpenAI ChatGPT.}
+
+    # Persistent storage volume nc_py_api expects (APP_PERSISTENT_STORAGE).
+    volumes:
+      - gcf_talk_ai_bot_data:/data
+
+    # Mirrors the HEALTHCHECK in the Dockerfile; compose-level copy makes the
+    # health state visible in `docker compose ps` without inspecting.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/heartbeat"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+networks:
+  # External: created and owned by the nginxproxymanager compose project.
+  # We attach to it, we do not define or manage it.
+  vps2DockerNet:
+    external: true
+
+volumes:
+  gcf_talk_ai_bot_data:
