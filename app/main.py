@@ -11,16 +11,23 @@ Wires together:
 ASYNC MIGRATION (nc_py_api 0.30.x):
   nc_py_api >= 0.30 deprecated the synchronous `TalkBot` / sync lifecycle
   handlers. Under a FastAPI async `lifespan`, a *synchronous* enabled_handler
-  is not awaited correctly by `set_handlers`: AppAPI receives 200 OK for
-  `PUT /enabled` but the handler body (the `enable_bot` call that registers
-  the bot in Talk) never actually runs. The fix is to commit fully to the
-  async path:
+  is not awaited correctly by `set_handlers`. Hence the full async path:
     * talk_bot.TalkBot          -> talk_bot.AsyncTalkBot
     * def enabled_handler        -> async def enabled_handler
-    * BOT.enable_bot(nc)         -> await BOT.enable_bot(nc)
     * NextcloudApp               -> AsyncNextcloudApp
-  The domain, services, adapters and utils layers are untouched — the
-  hexagonal architecture keeps this transport-layer bug contained to main.py.
+
+TALK BOT REGISTRATION API:
+  The bot is registered with Talk through the *NextcloudApp* object, NOT the
+  AsyncTalkBot object. AsyncTalkBot only carries identity (callback_url,
+  display_name, description) and is used to *receive/answer* messages. The
+  registration verbs live on `nc`:
+    * nc.register_talk_bot(callback_url, display_name, description)
+        -> registers the bot, AppAPI writes a row in appconfig_ex
+    * nc.unregister_talk_bot(callback_url)
+        -> removes it
+  An earlier revision called BOT.enable_bot(nc), which never existed on
+  AsyncTalkBot (AttributeError at enable time): the ExApp showed [enabled]
+  in AppAPI but never appeared in `talk:bot:list`.
 """
 from __future__ import annotations
 
@@ -49,10 +56,13 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-# AsyncTalkBot is the 0.30.x replacement for the deprecated sync TalkBot.
-# Its enable_bot/disable_bot coroutines must be awaited (see enabled_handler).
+_BOT_CALLBACK_URL = "/talk_bot"
+
+# AsyncTalkBot carries the bot's identity and is the object used to *answer*
+# messages (atalk_bot_msg yields TalkBotMessage; .send_message replies).
+# It does NOT register itself — that is done via AsyncNextcloudApp below.
 BOT = talk_bot.AsyncTalkBot(
-    callback_url="/talk_bot",
+    callback_url=_BOT_CALLBACK_URL,
     display_name=settings.bot_display_name,
     description=settings.bot_description,
 )
@@ -77,16 +87,21 @@ async def enabled_handler(enabled: bool, nc: AsyncNextcloudApp) -> str:
     where to deliver chat webhooks. AppAPI expects an empty string on
     success or an error message on failure.
 
-    MUST be async: `set_handlers` awaits this handler. A sync version returns
-    control before `enable_bot` runs, leaving the ExApp [enabled] in AppAPI
-    but absent from `talk:bot:list`.
+    Registration goes through `nc` (AsyncNextcloudApp), not through BOT:
+      * register_talk_bot writes the callback + signing secret into Talk;
+        after this the bot shows up in `occ talk:bot:list`.
+      * unregister_talk_bot removes it on disable.
     """
     try:
         if enabled:
-            await BOT.enable_bot(nc)
+            await nc.register_talk_bot(
+                _BOT_CALLBACK_URL,
+                settings.bot_display_name,
+                settings.bot_description,
+            )
             logger.info("Bot registered with Talk.")
         else:
-            await BOT.disable_bot(nc)
+            await nc.unregister_talk_bot(_BOT_CALLBACK_URL)
             logger.info("Bot unregistered from Talk.")
     except Exception as exc:
         logger.exception("enabled_handler failed")
@@ -111,7 +126,7 @@ APP = FastAPI(lifespan=lifespan)
 APP.add_middleware(AppAPIAuthMiddleware)
 
 
-@APP.post("/talk_bot")
+@APP.post(_BOT_CALLBACK_URL)
 async def talk_bot_webhook(
     message: Annotated[talk_bot.TalkBotMessage, Depends(atalk_bot_msg)],
 ) -> Response:
