@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 async def handle_message(
     message: talk_bot.TalkBotMessage,
     service: ConversationService,
+    bot: talk_bot.AsyncTalkBot,
 ) -> None:
     content = message.object_content or {}
     user_text = content.get("message") or ""
@@ -32,4 +33,4 @@ async def handle_message(
     )
 
     if reply is not None:
-        message.send_message(reply)
+        await bot.send_message(reply, message)

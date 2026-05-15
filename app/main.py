@@ -128,7 +128,7 @@ APP.add_middleware(AppAPIAuthMiddleware)
 
 @APP.post(_BOT_CALLBACK_URL)
 async def talk_bot_webhook(
-    message: Annotated[talk_bot.TalkBotMessage, Depends(atalk_bot_msg)],
+     message: Annotated[talk_bot.TalkBotMessage, Depends(atalk_bot_msg)],
 ) -> Response:
     """Talk delivers chat events here.
 
@@ -140,7 +140,7 @@ async def talk_bot_webhook(
 
     By the time the body of this function runs, the message is authenticated.
     """
-    await handle_message(message, _service)
+    await handle_message(message, _service, BOT)
     return Response(status_code=200)
 
 
