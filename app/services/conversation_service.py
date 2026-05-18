@@ -21,9 +21,9 @@ _FALLBACK_MSG = (
 
 
 class ConversationService:
-    def __init__(self, llm: LLMPort, bot_display_name: str) -> None:
+    def __init__(self, llm: LLMPort, bot_mention_name: str) -> None:
         self._llm = llm
-        self._bot_display_name = bot_display_name
+        self._bot_mention_name = bot_mention_name
 
     async def handle(
         self,
@@ -36,11 +36,11 @@ class ConversationService:
             raw_text=raw_text,
             actor_id=actor_id,
             object_name=object_name,
-            bot_display_name=self._bot_display_name,
+            bot_mention_name=self._bot_mention_name,
         ):
             return None
 
-        clean = strip_mention(raw_text, self._bot_display_name)
+        clean = strip_mention(raw_text, self._bot_mention_name)
         messages = build_messages(user_text=clean)
         try:
             return await self._llm.complete(messages)

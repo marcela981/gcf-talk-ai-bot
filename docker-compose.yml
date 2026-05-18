@@ -42,6 +42,7 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:?OPENAI_API_KEY is required - see .env}
       - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
       - BOT_DISPLAY_NAME=${BOT_DISPLAY_NAME:-GCF AI Bot}
+      - BOT_MENTION_NAME=${BOT_MENTION_NAME:-IA}
       - BOT_DESCRIPTION=${BOT_DESCRIPTION:-AI-powered assistant using OpenAI ChatGPT.}
 
     # Persistent storage volume nc_py_api expects (APP_PERSISTENT_STORAGE).

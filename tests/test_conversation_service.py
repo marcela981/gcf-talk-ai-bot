@@ -12,7 +12,7 @@ from app.domain.message import Message
 from app.services.conversation_service import ConversationService, _FALLBACK_MSG
 
 
-BOT = "GCF AI Bot"
+MENTION = "IA"
 
 
 class FakeLLM:
@@ -47,7 +47,7 @@ class BoomLLM:
 @pytest.mark.asyncio
 async def test_returns_none_and_does_not_call_llm_when_not_mentioned():
     fake = FakeLLM()
-    service = ConversationService(llm=fake, bot_display_name=BOT)
+    service = ConversationService(llm=fake, bot_mention_name=MENTION)
 
     reply = await service.handle(
         raw_text="hola equipo",
@@ -62,10 +62,10 @@ async def test_returns_none_and_does_not_call_llm_when_not_mentioned():
 @pytest.mark.asyncio
 async def test_returns_llm_reply_and_strips_mention_from_prompt():
     fake = FakeLLM(reply="hola, ¿en qué te ayudo?")
-    service = ConversationService(llm=fake, bot_display_name=BOT)
+    service = ConversationService(llm=fake, bot_mention_name=MENTION)
 
     reply = await service.handle(
-        raw_text="@GCF AI Bot resume el último informe",
+        raw_text="@IA resume el último informe",
         actor_id="users/alice",
         object_name="message",
     )
@@ -75,17 +75,17 @@ async def test_returns_llm_reply_and_strips_mention_from_prompt():
     sent = fake.calls[0]
     user_msg = next(m for m in sent if m.role == "user")
     assert user_msg.content == "resume el último informe"
-    assert "@GCF AI Bot" not in user_msg.content
-    assert "@gcf ai bot" not in user_msg.content.lower()
+    assert "@IA" not in user_msg.content
+    assert "@ia" not in user_msg.content.lower()
 
 
 @pytest.mark.asyncio
 async def test_returns_fallback_on_llm_error():
     boom = BoomLLM()
-    service = ConversationService(llm=boom, bot_display_name=BOT)
+    service = ConversationService(llm=boom, bot_mention_name=MENTION)
 
     reply = await service.handle(
-        raw_text="@GCF AI Bot algo",
+        raw_text="@IA algo",
         actor_id="users/alice",
         object_name="message",
     )

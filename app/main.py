@@ -76,7 +76,7 @@ _adapter = OpenAIAdapter(
 )
 _service = ConversationService(
     llm=_adapter,
-    bot_display_name=settings.bot_display_name,
+    bot_mention_name=settings.bot_mention_name,
 )
 
 

@@ -23,6 +23,7 @@ except ImportError:
 @dataclass(frozen=True)
 class Settings:
     bot_display_name: str
+    bot_mention_name: str
     bot_description: str
     openai_api_key: str
     openai_model: str
@@ -31,6 +32,7 @@ class Settings:
 def _load() -> Settings:
     return Settings(
         bot_display_name=os.environ.get("BOT_DISPLAY_NAME", "GCF AI Bot"),
+        bot_mention_name=os.environ.get("BOT_MENTION_NAME", "IA"),
         bot_description=os.environ.get(
             "BOT_DESCRIPTION",
             "AI-powered assistant using OpenAI ChatGPT.",
