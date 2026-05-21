@@ -1,7 +1,7 @@
 """Unit tests for the pure trigger policy in app.domain.message_policy."""
 from __future__ import annotations
 
-from app.domain.message_policy import should_reply, strip_mention
+from app.domain.message_policy import should_reply, strip_invocation
 
 
 MENTION = "IA"
@@ -67,11 +67,55 @@ def test_short_name_not_in_word():
     assert _call(raw_text="vIAje largo") is False
 
 
-def test_strip_mention_removes_mention_and_collapses_whitespace():
-    assert strip_mention("@IA hola", MENTION) == "hola"
-    assert strip_mention("hey @IA how are you?", MENTION) == "hey how are you?"
-    assert strip_mention('@"IA"   resume esto', MENTION) == "resume esto"
+def test_accepts_prefix_lowercase():
+    assert _call(raw_text="/ai ¿qué hora es?") is True
 
 
-def test_strip_mention_is_noop_when_no_mention():
-    assert strip_mention("solo texto", MENTION) == "solo texto"
+def test_accepts_prefix_uppercase():
+    assert _call(raw_text="/AI hola") is True
+
+
+def test_accepts_prefix_mixed_case():
+    assert _call(raw_text="/Ai ping") is True
+
+
+def test_accepts_prefix_with_leading_spaces():
+    assert _call(raw_text="   /ai algo") is True
+
+
+def test_accepts_prefix_with_newline_separator():
+    assert _call(raw_text="/ai\n¿algo?") is True
+
+
+def test_rejects_prefix_without_content():
+    assert _call(raw_text="/ai") is False
+
+
+def test_rejects_prefix_glued_to_word():
+    assert _call(raw_text="/airbnb consulta") is False
+
+
+def test_rejects_prefix_not_at_start():
+    assert _call(raw_text="hola /ai algo") is False
+
+
+def test_strip_invocation_removes_mention_and_collapses_whitespace():
+    assert strip_invocation("@IA hola", MENTION) == "hola"
+    assert strip_invocation("hey @IA how are you?", MENTION) == "hey how are you?"
+    assert strip_invocation('@"IA"   resume esto', MENTION) == "resume esto"
+
+
+def test_strip_invocation_is_noop_when_no_trigger():
+    assert strip_invocation("solo texto", MENTION) == "solo texto"
+
+
+def test_strip_invocation_removes_prefix():
+    assert strip_invocation("/ai pregunta", MENTION) == "pregunta"
+
+
+def test_strip_invocation_removes_prefix_with_leading_spaces():
+    assert strip_invocation("   /ai  hola", MENTION) == "hola"
+
+
+def test_strip_invocation_still_removes_mention():
+    assert strip_invocation("@IA resume esto", MENTION) == "resume esto"

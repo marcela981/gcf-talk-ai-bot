@@ -7,6 +7,19 @@ from __future__ import annotations
 import re
 
 
+# Trailing space is intentional: it documents that `/ai` must be followed by a
+# separator so lookalikes such as `/airbnb` or `/aireos` cannot fire the bot.
+# The compiled pattern below enforces the same invariant against any whitespace
+# (space, tab, newline), not only the literal space.
+AI_PREFIX = "/ai "
+
+_AI_PREFIX_TOKEN = AI_PREFIX.rstrip()
+_AI_PREFIX_PATTERN = re.compile(
+    rf"^\s*{re.escape(_AI_PREFIX_TOKEN)}\s",
+    re.IGNORECASE,
+)
+
+
 def should_reply(
     *,
     raw_text: str,
@@ -22,11 +35,24 @@ def should_reply(
         return False
     if _mention_pattern(bot_mention_name).search(raw_text) is not None:
         return True
+    if _has_prefix(raw_text):
+        return True
     return False
 
 
-def strip_mention(text: str, bot_mention_name: str) -> str:
+def strip_invocation(text: str, bot_mention_name: str) -> str:
+    """Remove the trigger token (prefix or @mention) and return the payload."""
+    if _has_prefix(text):
+        return _strip_prefix(text)
     return _strip_mention(text, bot_mention_name)
+
+
+def _has_prefix(text: str) -> bool:
+    return _AI_PREFIX_PATTERN.search(text) is not None
+
+
+def _strip_prefix(text: str) -> str:
+    return _AI_PREFIX_PATTERN.sub("", text, count=1).strip()
 
 
 def _strip_mention(text: str, bot_mention_name: str) -> str:

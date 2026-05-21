@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 
 from app.adapters.openai_adapter import LLMError
-from app.domain.message_policy import should_reply, strip_mention
+from app.domain.message_policy import should_reply, strip_invocation
 from app.domain.prompt_builder import build_messages
 from app.services.llm_port import LLMPort
 
@@ -40,7 +40,7 @@ class ConversationService:
         ):
             return None
 
-        clean = strip_mention(raw_text, self._bot_mention_name)
+        clean = strip_invocation(raw_text, self._bot_mention_name)
         messages = build_messages(user_text=clean)
         try:
             return await self._llm.complete(messages)

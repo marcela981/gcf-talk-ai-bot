@@ -80,6 +80,24 @@ async def test_returns_llm_reply_and_strips_mention_from_prompt():
 
 
 @pytest.mark.asyncio
+async def test_prefix_invocation_strips_prefix_in_prompt():
+    fake = FakeLLM()
+    service = ConversationService(llm=fake, bot_mention_name=MENTION)
+
+    reply = await service.handle(
+        raw_text="/ai ¿qué es SOLID?",
+        actor_id="users/alice",
+        object_name="message",
+    )
+
+    assert reply == "respuesta del fake"
+    assert len(fake.calls) == 1
+    sent = fake.calls[0]
+    user_msg = next(m for m in sent if m.role == "user")
+    assert user_msg.content == "¿qué es SOLID?"
+
+
+@pytest.mark.asyncio
 async def test_returns_fallback_on_llm_error():
     boom = BoomLLM()
     service = ConversationService(llm=boom, bot_mention_name=MENTION)
