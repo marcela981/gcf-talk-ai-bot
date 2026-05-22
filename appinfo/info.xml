@@ -32,7 +32,9 @@
             <image-tag>latest</image-tag>
         </docker-install>
         <scopes>
+            <value>TALK</value>
             <value>TALK_BOT</value>
+            <value>FILES</value>
         </scopes>
     </external-app>
 </info>
