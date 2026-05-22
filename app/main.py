@@ -32,6 +32,7 @@ TALK BOT REGISTRATION API:
 from __future__ import annotations
 
 import logging
+import os
 from contextlib import asynccontextmanager
 from typing import Annotated
 
@@ -123,7 +124,12 @@ APP = FastAPI(lifespan=lifespan)
 # Validates every inbound request against the ExApp shared secret + headers
 # AppAPI sets (EX-APP-ID, AUTHORIZATION-APP-API, ...). Requests that don't
 # come from a trusted Nextcloud instance are rejected with HTTP 401.
-APP.add_middleware(AppAPIAuthMiddleware)
+#
+# SPIKE — REMOVE BEFORE MERGE: `disable_for=["debug/files-spike"]` exposes the
+# spike endpoint without AppAPI signing. The container only listens on the
+# internal Docker network (no ports: in docker-compose.yml), so the surface
+# is limited to operators with shell access to that network.
+APP.add_middleware(AppAPIAuthMiddleware, disable_for=["debug/files-spike"])
 
 
 @APP.post(_BOT_CALLBACK_URL)
@@ -142,6 +148,20 @@ async def talk_bot_webhook(
     """
     await handle_message(message, _service, BOT)
     return Response(status_code=200)
+
+
+# SPIKE — REMOVE BEFORE MERGE -------------------------------------------------
+# Temporary debug endpoint to drive the Nextcloud Files spike (ADR-006). Bound
+# to POST so it never gets hit by a casual browser probe; payload is ignored.
+# The endpoint is excluded from AppAPIAuthMiddleware (see disable_for above).
+# Gated by an env var so the route is not even registered in production.
+if os.environ.get("SPIKE_FILES_ENABLED") == "1":
+    from app._spike.nextcloud_files_spike import run_spike  # SPIKE import
+
+    @APP.post("/debug/files-spike")  # SPIKE — REMOVE BEFORE MERGE
+    async def _debug_files_spike() -> dict:
+        return await run_spike()
+# SPIKE END -------------------------------------------------------------------
 
 
 if __name__ == "__main__":
