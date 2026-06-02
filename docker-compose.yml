@@ -45,6 +45,23 @@ services:
       - BOT_MENTION_NAME=${BOT_MENTION_NAME:-IA}
       - BOT_DESCRIPTION=${BOT_DESCRIPTION:-AI-powered assistant using OpenAI ChatGPT.}
 
+      # --- Fase 2: RAG -----------------------------------------------------
+      # El bot (ruta de petición) solo necesita el vector store + la key para
+      # embeber la query. Supabase solo lo usa la CLI de ingestión.
+      - PGVECTOR_DSN=${PGVECTOR_DSN:-postgresql://rag:${PGVECTOR_PASSWORD:?PGVECTOR_PASSWORD is required - see .env}@gcf-talk-ai-pgvector:5432/rag}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-text-embedding-3-small}
+      - RAG_TOP_K=${RAG_TOP_K:-4}
+      - RAG_SIMILARITY_THRESHOLD=${RAG_SIMILARITY_THRESHOLD:-0.75}
+      - RAG_DEFAULT_ROLE_SCOPE=${RAG_DEFAULT_ROLE_SCOPE:-corporate}
+      # Solo necesarias si se ejecuta `python -m app.ingest` dentro de este
+      # contenedor; el corpus es READ-ONLY (clave de mínimo privilegio).
+      - SUPABASE_URL=${SUPABASE_URL:-}
+      - SUPABASE_KEY=${SUPABASE_KEY:-}
+      - SUPABASE_BUCKET=${SUPABASE_BUCKET:-}
+
+    depends_on:
+      - pgvector
+
     # Persistent storage volume nc_py_api expects (APP_PERSISTENT_STORAGE).
     volumes:
       - gcf_talk_ai_bot_data:/data
@@ -58,6 +75,34 @@ services:
       start_period: 10s
       retries: 3
 
+  # Vector store dedicado de la Fase 2 (ADR-007). Externo al Postgres de Chat
+  # IA. Imagen pgvector/pgvector:pg16. NO se publica al host (sin `ports:`):
+  # todo el tráfico vive dentro de vps2DockerNet, igual que el bot.
+  pgvector:
+    image: pgvector/pgvector:pg16
+    container_name: gcf-talk-ai-pgvector
+    restart: unless-stopped
+    networks:
+      - vps2DockerNet
+    expose:
+      - "5432"
+    environment:
+      - POSTGRES_DB=${PGVECTOR_DB:-rag}
+      - POSTGRES_USER=${PGVECTOR_USER:-rag}
+      - POSTGRES_PASSWORD=${PGVECTOR_PASSWORD:?PGVECTOR_PASSWORD is required - see .env}
+    volumes:
+      - gcf_pgvector_data:/var/lib/postgresql/data
+      # Migración inicial: docker-entrypoint la ejecuta una sola vez, al
+      # inicializar un volumen de datos vacío. Re-aplicarla manualmente si el
+      # volumen ya existía (ver pasos del operador en ARCHITECTURE.md).
+      - ./migrations/0001_pgvector_init.sql:/docker-entrypoint-initdb.d/0001_pgvector_init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PGVECTOR_USER:-rag} -d ${PGVECTOR_DB:-rag}"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
 networks:
   # External: created and owned by the nginxproxymanager compose project.
   # We attach to it, we do not define or manage it.
@@ -66,3 +111,4 @@ networks:
 
 volumes:
   gcf_talk_ai_bot_data:
+  gcf_pgvector_data:

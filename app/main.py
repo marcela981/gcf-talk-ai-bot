@@ -49,6 +49,7 @@ from nc_py_api.ex_app import (
 
 from app.adapters.openai_adapter import OpenAIAdapter
 from app.config import settings
+from app.domain.retrieval_policy import RetrievalPolicy
 from app.handlers.talk_handler import handle_message
 from app.services.conversation_service import ConversationService
 
@@ -75,9 +76,44 @@ _adapter = OpenAIAdapter(
     api_key=settings.openai_api_key,
     default_model=settings.openai_model,
 )
+
+# --- Fase 2 (RAG): cableado del slot L2 -------------------------------------
+# La recuperación es aditiva y best-effort. Solo se cablea si hay config mínima
+# (PGVECTOR_DSN + OPENAI_API_KEY); en otro caso el servicio degrada al
+# comportamiento de la Fase 1 (responde sin contexto). Los adapters de RAG
+# (psycopg/pgvector, openai embedder) se importan de forma perezosa para que el
+# import de main.py no exija esas dependencias cuando RAG está deshabilitado.
+_embedder = None
+_retrieval = None
+_retrieval_policy = None
+if settings.rag_enabled:
+    from app.adapters.openai_embedder import OpenAIEmbedder
+    from app.adapters.pgvector_store import PgVectorStore
+
+    _retrieval_policy = RetrievalPolicy(
+        top_k=settings.rag_top_k,
+        similarity_threshold=settings.rag_similarity_threshold,
+    )
+    _embedder = OpenAIEmbedder(
+        api_key=settings.openai_api_key,
+        model=settings.embedding_model,
+    )
+    _retrieval = PgVectorStore(
+        dsn=settings.pgvector_dsn,
+        top_k=settings.rag_top_k,
+        similarity_threshold=settings.rag_similarity_threshold,
+    )
+    logger.info("RAG habilitado: contexto corporativo se inyectará en L2.")
+else:
+    logger.info("RAG deshabilitado (sin PGVECTOR_DSN/OPENAI_API_KEY); modo Fase 1.")
+
 _service = ConversationService(
     llm=_adapter,
     bot_mention_name=settings.bot_mention_name,
+    embedder=_embedder,
+    retrieval=_retrieval,
+    retrieval_policy=_retrieval_policy,
+    role_scope=settings.rag_default_role_scope,
 )
 
 

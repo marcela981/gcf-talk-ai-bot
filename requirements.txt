@@ -10,3 +10,15 @@ openai>=1.40.0
 
 # Local dev convenience: load .env when running outside the AppAPI container.
 python-dotenv>=1.0.0
+
+# --- Fase 2: RAG -----------------------------------------------------------
+# httpx: cliente REST read-only contra Supabase Storage (adapters/
+# supabase_storage_loader.py). Ya entra como transitiva de openai/nc_py_api;
+# se pinea explícito porque ahora es dependencia directa.
+httpx>=0.27,<0.29
+# psycopg[binary] + pgvector: cliente async del vector store (ADR-007).
+psycopg[binary]>=3.1,<4
+pgvector>=0.3,<0.5
+# tiktoken: tokenizador cl100k_base para el chunking (ADR-009). Solo se usa en
+# el adapter; el dominio no lo importa.
+tiktoken>=0.7,<1
