@@ -10,6 +10,17 @@ puerto `search(query_embedding, role_scope)` permanece estable.
 Distancia coseno: la similitud reportada es `1 - (embedding <=> q)`, en [0, 1].
 El filtro por rol (`role_scope`) va en el WHERE (PRE-retrieval), nunca después.
 
+Tipo `vector` (por qué upsert funcionaba y search no):
+`register_vector_async` registra dumpers SOLO para `numpy.ndarray` y la clase
+`Vector` de pgvector — NO para `list`. Si se bindea una `list[float]`, psycopg la
+envía como `double precision[]`. En `upsert` el INSERT escribe en una columna
+`vector` y pgvector aplica su cast de ASIGNACIÓN `double precision[] -> vector`,
+así que toleraba el array. En `search` el operador `<=>` exige `vector <=> vector`
+y en contexto de operador NO se aplican casts de asignación: de ahí el error
+`operator does not exist: vector <=> double precision[]`. La solución unificada es
+envolver SIEMPRE el embedding en `Vector` (ver `_to_vector`), un único punto que
+deja ambos caminos enviando el tipo `vector` nativo.
+
 Privilegio mínimo: el bot solo lee (search); idealmente el DSN del bot apunta a
 un rol Postgres de solo-lectura y la ingestión usa un DSN con escritura.
 PENDIENTE: separar PGVECTOR_DSN_READONLY (bot) de PGVECTOR_DSN (ingest) — el spec
@@ -20,6 +31,7 @@ from __future__ import annotations
 import logging
 
 import psycopg
+from pgvector import Vector
 from pgvector.psycopg import register_vector_async
 
 from app.domain.chunk import Chunk, EmbeddedChunk
@@ -27,6 +39,18 @@ from app.domain.chunk import Chunk, EmbeddedChunk
 logger = logging.getLogger(__name__)
 
 _TABLE = "rag_chunks"
+
+
+def _to_vector(values: list[float]) -> Vector:
+    """Envuelve un embedding en el tipo `vector` nativo de pgvector.
+
+    Único punto de conversión: `register_vector_async` solo conoce `numpy.ndarray`
+    y `Vector`, no `list`. Pasar la `list` cruda la bindearía como
+    `double precision[]` (rompe el operador `<=>` en search; ver docstring del
+    módulo). Usar `Vector` evita depender de numpy en el call site y hace que
+    search (operador) y upsert (INSERT) usen el mismo tipo.
+    """
+    return Vector(values)
 
 _SEARCH_SQL = f"""
 SELECT source, chunk_id, content, role_scope, 1 - (embedding <=> %(q)s) AS score
@@ -61,7 +85,7 @@ class PgVectorStore:
                 await cur.execute(
                     _SEARCH_SQL,
                     {
-                        "q": query_embedding,
+                        "q": _to_vector(query_embedding),
                         "role": role_scope,
                         "threshold": self._threshold,
                         "top_k": self._top_k,
@@ -89,7 +113,7 @@ class PgVectorStore:
                 ec.chunk.chunk_id,
                 ec.chunk.role_scope,
                 ec.chunk.content,
-                ec.embedding,
+                _to_vector(ec.embedding),
             )
             for ec in chunks
         ]
