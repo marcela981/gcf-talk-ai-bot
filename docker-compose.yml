@@ -54,9 +54,12 @@ services:
       - RAG_SIMILARITY_THRESHOLD=${RAG_SIMILARITY_THRESHOLD:-0.75}
       - RAG_DEFAULT_ROLE_SCOPE=${RAG_DEFAULT_ROLE_SCOPE:-corporate}
       # Solo necesarias si se ejecuta `python -m app.ingest` dentro de este
-      # contenedor; el corpus es READ-ONLY (clave de mínimo privilegio).
+      # contenedor; el corpus es READ-ONLY (anon key). Fuente = tabla-catálogo
+      # `documents` (ADR-006-ter). RAG_INGEST_LEVELS filtra por access_level.
       - SUPABASE_URL=${SUPABASE_URL:-}
       - SUPABASE_KEY=${SUPABASE_KEY:-}
+      - RAG_INGEST_LEVELS=${RAG_INGEST_LEVELS:-noroot}
+      # DEPRECADO (ADR-006-ter): el corpus ya no vive en un bucket; sin efecto.
       - SUPABASE_BUCKET=${SUPABASE_BUCKET:-}
 
     depends_on:

@@ -22,3 +22,6 @@ pgvector>=0.3,<0.5
 # tiktoken: tokenizador cl100k_base para el chunking (ADR-009). Solo se usa en
 # el adapter; el dominio no lo importa.
 tiktoken>=0.7,<1
+# pypdf: extracción de texto de PDF en adapters/pdf_text_extractor.py
+# (ADR-006-ter). Solo lo usa el adapter; services/ y domain/ no lo importan.
+pypdf>=4,<6

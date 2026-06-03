@@ -35,12 +35,17 @@ class Settings:
     # not wired (see `rag_enabled`).
     supabase_url: str
     supabase_key: str
+    # DEPRECADO (ADR-006-ter): el corpus ya no vive en un bucket sino en la
+    # tabla-catálogo `documents`. Se conserva para no romper despliegues que aún
+    # lo definan; ningún código vigente lo consume.
     supabase_bucket: str
     pgvector_dsn: str
     embedding_model: str
     rag_top_k: int
     rag_similarity_threshold: float
     rag_default_role_scope: str
+    # Niveles de access_level a ingerir desde la tabla-catálogo (ADR-006-ter).
+    rag_ingest_levels: tuple[str, ...]
 
     @property
     def rag_enabled(self) -> bool:
@@ -73,6 +78,11 @@ def _load() -> Settings:
             os.environ.get("RAG_SIMILARITY_THRESHOLD", "0.75")
         ),
         rag_default_role_scope=os.environ.get("RAG_DEFAULT_ROLE_SCOPE", "corporate"),
+        rag_ingest_levels=tuple(
+            part.strip()
+            for part in os.environ.get("RAG_INGEST_LEVELS", "noroot").split(",")
+            if part.strip()
+        ),
     )
 
 

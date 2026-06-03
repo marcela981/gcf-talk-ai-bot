@@ -1,15 +1,18 @@
-"""Caso de uso de ingestión: loader -> chunk -> embed -> upsert (idempotente).
+"""Caso de uso de ingestión: loader -> extract -> chunk -> embed -> upsert.
 
 Orquesta la indexación del corpus en el vector store. No conoce a FastAPI ni a
 nc_py_api ni a los SDKs concretos: depende solo de puertos (`CorpusLoaderPort`,
-`EmbedderPort`, `VectorWritePort`) y del `Tokenizer` del dominio.
+`TextExtractorPort`, `EmbedderPort`, `VectorWritePort`) y del `Tokenizer` del
+dominio.
 
-Extracción de texto: en esta fase solo se soportan tipos `text/*` (incluido
-text/markdown), decodificados como UTF-8. Los binarios (PDF, DOCX, …) se omiten
-con aviso.
-PENDIENTE: extractor de PDF/DOCX (p. ej. pypdf) — no se añade una dependencia
-no listada en el spec de forma silenciosa; el corpus de arranque es texto plano
-o markdown.
+Extracción de texto: delegada al `TextExtractorPort` (PDF vía pypdf + texto
+plano), porque las reglas de capas prohíben importar SDKs externos aquí
+(ARCHITECTURE.md §3). El servicio solo decide qué hacer con su resultado.
+
+Resiliencia (ADR-006-ter): un fallo al DESCARGAR o EXTRAER un documento concreto
+no aborta el lote — se registra, se cuenta como omitido y se continúa. Los
+fallos de EMBED/UPSERT sí propagan: suelen ser sistémicos (OpenAI/DB caídos) y
+enmascararlos ocultaría que el lote completo quedó sin indexar.
 """
 from __future__ import annotations
 
@@ -18,9 +21,10 @@ from dataclasses import dataclass, field
 
 from app.domain.chunk import Chunk, EmbeddedChunk
 from app.domain.chunking import Tokenizer, chunk_text
-from app.services.corpus_loader_port import CorpusLoaderPort, StoredObject
+from app.services.corpus_loader_port import CorpusLoaderPort
 from app.services.embedder_port import EmbedderPort
 from app.services.retrieval_port import VectorWritePort
+from app.services.text_extractor_port import TextExtractorPort
 
 logger = logging.getLogger(__name__)
 
@@ -34,23 +38,12 @@ class IngestionReport:
     skipped: list[str] = field(default_factory=list)
 
 
-def _extract_text(obj: StoredObject, data: bytes) -> str | None:
-    """Decodifica a texto los tipos soportados; ``None`` si no se soporta."""
-    ctype = obj.content_type.split(";", 1)[0].strip().lower()
-    if not (ctype.startswith("text/") or ctype in {"application/json"}):
-        return None
-    try:
-        return data.decode("utf-8")
-    except UnicodeDecodeError:
-        logger.warning("No se pudo decodificar %s como UTF-8; se omite.", obj.path)
-        return None
-
-
 class IngestionService:
     def __init__(
         self,
         *,
         loader: CorpusLoaderPort,
+        extractor: TextExtractorPort,
         embedder: EmbedderPort,
         store: VectorWritePort,
         tokenizer: Tokenizer,
@@ -58,6 +51,7 @@ class IngestionService:
         max_tokens: int = 500,
     ) -> None:
         self._loader = loader
+        self._extractor = extractor
         self._embedder = embedder
         self._store = store
         self._tokenizer = tokenizer
@@ -71,15 +65,30 @@ class IngestionService:
         report.documents_seen = len(objects)
 
         for obj in objects:
-            data = await self._loader.download(obj.path)
-            text = _extract_text(obj, data)
-            if text is None:
+            # `source` (cita ADR-013) puede diferir del `path` (locator de
+            # descarga): en la tabla-catálogo path=URL y source=id.
+            source = obj.source or obj.path
+            try:
+                data = await self._loader.download(obj.path)
+                text = self._extractor.extract(obj.content_type, data)
+            except Exception as exc:  # noqa: BLE001 — resiliencia deliberada
                 report.documents_skipped += 1
-                report.skipped.append(obj.path)
-                logger.info("Omitido (tipo no soportado): %s [%s]", obj.path, obj.content_type)
+                report.skipped.append(source)
+                logger.warning(
+                    "Omitido por error al descargar/extraer %s: %s", source, exc
+                )
                 continue
 
-            written = await self._index_document(obj.path, text)
+            if text is None:
+                report.documents_skipped += 1
+                report.skipped.append(source)
+                logger.info(
+                    "Omitido (tipo no soportado): %s [%s]", source, obj.content_type
+                )
+                continue
+
+            role_scope = obj.role_scope or self._role_scope
+            written = await self._index_document(source, text, role_scope)
             report.documents_indexed += 1
             report.chunks_written += written
 
@@ -92,7 +101,7 @@ class IngestionService:
         )
         return report
 
-    async def _index_document(self, source: str, text: str) -> int:
+    async def _index_document(self, source: str, text: str, role_scope: str) -> int:
         fragments = chunk_text(text, tokenizer=self._tokenizer, max_tokens=self._max_tokens)
         if not fragments:
             # Documento vacío: reemplaza por nada (borra fragmentos previos).
@@ -106,7 +115,7 @@ class IngestionService:
                     source=source,
                     chunk_id=i,
                     content=fragment,
-                    role_scope=self._role_scope,
+                    role_scope=role_scope,
                 ),
                 embedding=vector,
             )
