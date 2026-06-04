@@ -20,7 +20,13 @@ Open/Closed Principle:
 
 The final order produced by `build_messages` is:
 
-    [L0] + [extra_system items in order] + [user message]
+    [L0] + [extra_system items in order] + [history turns] + [user message]
+
+`history` (ADR-014) carries the previous `user`/`assistant` turns of the room,
+in chronological order. It sits *after* the L1/L2 system slots and *before* the
+current user message, so retrieved context still frames the whole exchange while
+the running dialogue precedes the question being answered. When `history` is
+``None``/empty the order is byte-for-byte the Fase 1 order (no regression).
 """
 from __future__ import annotations
 
@@ -130,6 +136,7 @@ inmutables."""
 def build_messages(
     *,
     user_text: str,
+    history: list[Message] | None = None,
     extra_system: list[str] | None = None,
 ) -> list[Message]:
     """Return the ordered message list for the LLM.
@@ -139,9 +146,17 @@ def build_messages(
     are appended as additional `system` messages between L0 and the user
     message — this is the slot reserved for L1 (configurable) and L2
     (dynamic) layers in Fase 2.
+
+    `history` (ADR-014) is an additive, optional list of previous `user`/
+    `assistant` turns (excluding the current message). It is inserted between
+    the system slots and the current user message. ``None``/empty reproduces the
+    Fase 1 order exactly — this parameter only ever *adds* turns, it never
+    reorders or removes the L0/extra_system/user invariants.
     """
     messages: list[Message] = [Message(role="system", content=L0_CORE_SYSTEM_PROMPT)]
     if extra_system:
         messages.extend(Message(role="system", content=item) for item in extra_system)
+    if history:
+        messages.extend(history)
     messages.append(Message(role="user", content=user_text))
     return messages

@@ -51,6 +51,42 @@ def test_extra_system_multiple_items_preserves_order():
     assert msgs[3].content == "hola"
 
 
+def test_history_sits_between_extra_system_and_current_user():
+    history = [
+        Message(role="user", content="turno 1"),
+        Message(role="assistant", content="respuesta 1"),
+    ]
+    msgs = build_messages(
+        user_text="turno 2",
+        history=history,
+        extra_system=["L2 block"],
+    )
+    assert msgs == [
+        Message(role="system", content=L0_CORE_SYSTEM_PROMPT),
+        Message(role="system", content="L2 block"),
+        Message(role="user", content="turno 1"),
+        Message(role="assistant", content="respuesta 1"),
+        Message(role="user", content="turno 2"),
+    ]
+
+
+def test_history_keeps_l0_first():
+    history = [Message(role="user", content="previo")]
+    msgs = build_messages(user_text="ahora", history=history)
+    assert msgs[0] == Message(role="system", content=L0_CORE_SYSTEM_PROMPT)
+
+
+def test_empty_history_equals_phase1_order():
+    none_msgs = build_messages(user_text="hola")
+    empty_msgs = build_messages(user_text="hola", history=[])
+    expected = [
+        Message(role="system", content=L0_CORE_SYSTEM_PROMPT),
+        Message(role="user", content="hola"),
+    ]
+    assert none_msgs == expected
+    assert empty_msgs == expected
+
+
 def test_l0_contains_critical_identity_anchors():
     for anchor in (
         "GCF",

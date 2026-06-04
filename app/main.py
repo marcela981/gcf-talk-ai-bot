@@ -107,12 +107,36 @@ if settings.rag_enabled:
 else:
     logger.info("RAG deshabilitado (sin PGVECTOR_DSN/OPENAI_API_KEY); modo Fase 1.")
 
+# --- ADR-014: memoria conversacional por sala (buffer in-memory) ------------
+# Singleton del proceso: un único buffer compartido por todas las salas (aislado
+# por token internamente). Solo se cablea si está habilitada; con None el
+# servicio degrada al comportamiento de la Fase 1 (sin historia). CONSTRAINT:
+# el buffer NO se comparte entre workers — el despliegue debe correr con 1 worker
+# (deuda D7). El adapter es stdlib-only, así que su import nunca falla.
+_memory = None
+if settings.conversation_memory_enabled:
+    from app.adapters.in_memory_conversation_memory import InMemoryConversationMemory
+
+    _memory = InMemoryConversationMemory(
+        max_messages=settings.conversation_history_max_messages,
+        ttl_seconds=settings.conversation_history_ttl_seconds,
+    )
+    logger.info(
+        "Memoria conversacional habilitada: buffer in-memory por sala "
+        "(max=%d turnos, ttl=%ds). Requiere 1 worker (deuda D7).",
+        settings.conversation_history_max_messages,
+        settings.conversation_history_ttl_seconds,
+    )
+else:
+    logger.info("Memoria conversacional deshabilitada; modo Fase 1 (sin historia).")
+
 _service = ConversationService(
     llm=_adapter,
     bot_mention_name=settings.bot_mention_name,
     embedder=_embedder,
     retrieval=_retrieval,
     retrieval_policy=_retrieval_policy,
+    memory=_memory,
     role_scope=settings.rag_default_role_scope,
 )
 

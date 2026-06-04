@@ -46,6 +46,13 @@ class Settings:
     rag_default_role_scope: str
     # Niveles de access_level a ingerir desde la tabla-catálogo (ADR-006-ter).
     rag_ingest_levels: tuple[str, ...]
+    # --- ADR-014: memoria conversacional por sala (buffer in-memory) ---------
+    # Efímera y opcional. Con `conversation_memory_enabled=False` el bot degrada
+    # al comportamiento de la Fase 1 (sin historia). Los límites acotan el buffer
+    # en RAM (cota de turnos por sala + expiración por entrada).
+    conversation_memory_enabled: bool
+    conversation_history_max_messages: int
+    conversation_history_ttl_seconds: int
 
     @property
     def rag_enabled(self) -> bool:
@@ -83,7 +90,22 @@ def _load() -> Settings:
             for part in os.environ.get("RAG_INGEST_LEVELS", "noroot").split(",")
             if part.strip()
         ),
+        conversation_memory_enabled=_env_bool("CONVERSATION_MEMORY_ENABLED", True),
+        conversation_history_max_messages=int(
+            os.environ.get("CONVERSATION_HISTORY_MAX_MESSAGES", "10")
+        ),
+        conversation_history_ttl_seconds=int(
+            os.environ.get("CONVERSATION_HISTORY_TTL_SECONDS", "3600")
+        ),
     )
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    """Parse a boolean env var. Unset → `default`; never raises on import."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
 settings = _load()

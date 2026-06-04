@@ -22,6 +22,7 @@ async def handle_message(
         raw_text=user_text,
         actor_id=message.actor_id,
         object_name=message.object_name,
+        token=message.conversation_token,
     )
 
     logger.info(
