@@ -224,6 +224,19 @@ if os.environ.get("SPIKE_FILES_ENABLED") == "1":
 # SPIKE END -------------------------------------------------------------------
 
 
+# SPIKE — REMOVE BEFORE MERGE -------------------------------------------------
+# Impersonation spike router (ADR-016): can the ExApp impersonate the invoking
+# user against Calendar (CalDAV) and Deck (REST)? Read-only. Gated by an env var
+# so the route is not registered in production. NOTE: this router is NOT added
+# to AppAPIAuthMiddleware's `disable_for`, so the HTTP route stays behind the
+# shared-secret middleware; prefer `python -m app._spike.impersonation` to run.
+if os.environ.get("SPIKE_IMPERSONATION_ENABLED") == "1":
+    from app._spike.impersonation.router import router as _impersonation_router
+
+    APP.include_router(_impersonation_router)  # SPIKE — REMOVE BEFORE MERGE
+# SPIKE END -------------------------------------------------------------------
+
+
 if __name__ == "__main__":
     # `run_app` reads APP_HOST / APP_PORT from the environment, which AppAPI
     # injects at deploy time (or .env in local development).
