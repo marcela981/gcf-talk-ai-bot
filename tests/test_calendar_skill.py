@@ -83,17 +83,36 @@ async def test_delegates_with_user_zone_range_and_presents_local_time():
 
 
 @pytest.mark.asyncio
-async def test_defaults_to_today_in_user_zone():
+async def test_defaults_to_today_in_user_zone_from_code_clock():
+    # "Hoy" lo decide el CÓDIGO con el reloj (inyectado para determinismo), no el LLM.
     calendar = FakeCalendar()
-    skill = ResumenAgendaSkill(calendar=calendar, tz=BOGOTA)
+    frozen = datetime(2026, 6, 30, 8, 0, tzinfo=BOGOTA)
+    skill = ResumenAgendaSkill(calendar=calendar, tz=BOGOTA, now_fn=lambda: frozen)
 
-    result = await skill.execute({}, _USER)
+    result = await skill.execute({}, _USER)  # sin 'fecha'
 
-    today_bogota = datetime.now(BOGOTA).date()
     assert result.ok
-    assert result.data["fecha"] == today_bogota.isoformat()
+    assert result.data["fecha"] == "2026-06-30"
     _, rng = calendar.calls[0]
-    assert rng == DateRange.for_day(today_bogota, tz=BOGOTA)
+    assert rng == DateRange.for_day(date(2026, 6, 30), tz=BOGOTA)
+
+
+@pytest.mark.asyncio
+async def test_explicit_fecha_is_respected_over_clock():
+    calendar = FakeCalendar()
+    # Reloj en un día distinto: si se respeta 'fecha', no debe usar el del reloj.
+    skill = ResumenAgendaSkill(
+        calendar=calendar,
+        tz=BOGOTA,
+        now_fn=lambda: datetime(2026, 6, 30, 8, 0, tzinfo=BOGOTA),
+    )
+
+    result = await skill.execute({"fecha": "2026-07-15"}, _USER)
+
+    assert result.ok
+    assert result.data["fecha"] == "2026-07-15"
+    _, rng = calendar.calls[0]
+    assert rng == DateRange.for_day(date(2026, 7, 15), tz=BOGOTA)
 
 
 @pytest.mark.asyncio

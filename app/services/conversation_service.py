@@ -37,6 +37,8 @@ de L2: el router es el LLM (ADR-017), que decide cuándo buscar.
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone, tzinfo
+from typing import Callable
 
 from app.adapters.openai_adapter import LLMError
 from app.domain.actor_context import ActorContext
@@ -45,6 +47,7 @@ from app.domain.identity import resolve_impersonated_uid
 from app.domain.message import Message
 from app.domain.message_policy import should_reply, strip_invocation
 from app.domain.prompt_builder import build_messages
+from app.domain.time_context import current_datetime_block
 from app.domain.retrieval_policy import RetrievalPolicy
 from app.domain.tool_calling import (
     AssistantToolCallTurn,
@@ -89,6 +92,8 @@ class ConversationService:
         skills: SkillRegistry | None = None,
         agent_max_iterations: int = _DEFAULT_MAX_AGENT_ITERATIONS,
         role_scope: str = "corporate",
+        tz: tzinfo = timezone.utc,
+        now_fn: Callable[[], datetime] | None = None,
     ) -> None:
         self._llm = llm
         self._bot_mention_name = bot_mention_name
@@ -103,6 +108,15 @@ class ConversationService:
             )
         self._agent_max_iterations = agent_max_iterations
         self._role_scope = role_scope
+        # Zona del usuario + reloj inyectable: la fecha actual la calcula el CÓDIGO
+        # (no el LLM) y se inyecta en el contexto del agente. `now_fn` permite
+        # congelar el reloj en tests; por defecto, el reloj real en la zona `tz`.
+        self._tz = tz
+        self._now_fn = now_fn
+
+    def _now(self) -> datetime:
+        """Instante actual en la zona del usuario (reloj real o el inyectado en tests)."""
+        return self._now_fn() if self._now_fn is not None else datetime.now(self._tz)
 
     @property
     def _rag_ready(self) -> bool:
@@ -191,8 +205,9 @@ class ConversationService:
     ) -> str:
         """Tool-use loop (ADR-017). Todo el estado vive en variables locales.
 
-        Semilla del transcript = L0 + historia + mensaje del usuario (sin L2
-        automático: el contexto se recupera *como tool*). Por iteración pide
+        Semilla del transcript = L0 + fecha/hora actuales (slot L1/L2, calculada
+        por el código, no por el LLM) + historia + mensaje del usuario (sin L2
+        automático de RAG: ese contexto se recupera *como tool*). Por iteración pide
         `chat_with_tools`; si hay tool-calls, las ejecuta y anexa sus resultados;
         si hay texto final, lo devuelve. Al agotar el tope cierra con el mejor
         texto visto o un mensaje de cierre (acota coste/latencia — ADR-017).
@@ -200,7 +215,13 @@ class ConversationService:
         assert self._skills is not None  # narrowing; garantizado por _agent_ready
         tools = self._skills.tool_specs()
         conversation: list[ConversationItem] = list(
-            build_messages(user_text=clean, history=snapshot)
+            build_messages(
+                user_text=clean,
+                history=snapshot,
+                # Ancla temporal: permite al modelo resolver fechas relativas
+                # ('mañana', 'el viernes') y elimina la alucinación de la fecha.
+                extra_system=[current_datetime_block(self._now())],
+            )
         )
 
         best_text: str | None = None

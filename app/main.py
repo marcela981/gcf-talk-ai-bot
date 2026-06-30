@@ -141,6 +141,13 @@ else:
 # `skills=None` ⇒ el servicio degrada a la ruta Fase 1/2 (`complete`, con contexto
 # L2 automático si hay RAG). Alta de skill = nueva clase + `register(...)` AQUÍ; el
 # motor (ConversationService) y el LLMPort NO se tocan (OCP).
+from app.domain.calendar import to_zoneinfo
+
+# Zona horaria del usuario (Bloque 2.1): encuadra el "día", presenta horas en local
+# y ancla la fecha actual que se inyecta en el contexto del agente. Nombre inválido
+# degrada a UTC.
+_bot_tz = to_zoneinfo(settings.bot_default_tz)
+
 _skills = None
 if settings.agent_enabled:
     from app.services.skill_registry import SkillRegistry
@@ -162,7 +169,6 @@ if settings.agent_enabled:
     if settings.appapi_ready:
         from app.adapters.calendar_skill import ResumenAgendaSkill
         from app.adapters.nextcloud_calendar_adapter import NextcloudCalendarAdapter
-        from app.domain.calendar import to_zoneinfo
 
         _calendar = NextcloudCalendarAdapter(
             endpoint=settings.nextcloud_url,
@@ -172,9 +178,6 @@ if settings.agent_enabled:
             aa_version=settings.aa_version,
             dav_url_suffix=settings.dav_url_suffix,
         )
-        # Zona del usuario para encuadrar el "día" y presentar horas en local
-        # (Bloque 2.1). Nombre inválido degrada a UTC (to_zoneinfo).
-        _bot_tz = to_zoneinfo(settings.bot_default_tz)
         _registry.register(ResumenAgendaSkill(calendar=_calendar, tz=_bot_tz))
 
     if len(_registry) > 0:
@@ -205,6 +208,7 @@ _service = ConversationService(
     skills=_skills,
     agent_max_iterations=settings.agent_max_iterations,
     role_scope=settings.rag_default_role_scope,
+    tz=_bot_tz,
 )
 
 

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date, datetime, timezone, tzinfo
-from typing import Any
+from typing import Any, Callable
 
 from app.domain.actor_context import ActorContext
 from app.domain.calendar import CalendarEvent, DateRange
@@ -25,12 +25,16 @@ logger = logging.getLogger(__name__)
 
 _NAME = "consultar_calendario"
 _DESCRIPTION = (
-    "Consulta los eventos del calendario del usuario que te escribe, para un día "
-    "concreto. Úsala cuando pregunte por su agenda o su disponibilidad, p. ej.: "
+    "Consulta los eventos del calendario del usuario que te escribe, para un día. "
+    "Úsala cuando pregunte por su agenda o su disponibilidad, p. ej.: "
     "'¿qué tengo hoy?', 'resúmeme mi día', '¿qué reuniones tengo mañana?', "
     "'¿estoy libre el martes?'. Devuelve la lista de eventos (título, inicio, fin) "
-    "del día indicado. SOLO lectura: no crea ni modifica eventos. Para un día "
-    "distinto de hoy, pasa la fecha resuelta en 'fecha'."
+    "del día indicado. SOLO lectura: no crea ni modifica eventos.\n"
+    "IMPORTANTE con la fecha: para HOY, OMITE el parámetro 'fecha' (lo resuelve el "
+    "sistema con la fecha real; no la inventes). Solo para un día distinto de hoy "
+    "('mañana', 'el viernes', una fecha explícita) pasa 'fecha' en ISO YYYY-MM-DD, "
+    "resolviéndola SIEMPRE respecto a la 'Fecha y hora actuales' del contexto, "
+    "nunca desde tu conocimiento previo."
 )
 _PARAMETERS_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -38,9 +42,10 @@ _PARAMETERS_SCHEMA: dict[str, Any] = {
         "fecha": {
             "type": "string",
             "description": (
-                "Día a consultar en formato ISO 'YYYY-MM-DD'. Resuelve tú "
-                "expresiones como 'hoy', 'mañana' o 'el martes' a la fecha "
-                "concreta antes de llamar. Omítela para consultar el día de hoy."
+                "Día a consultar en formato ISO 'YYYY-MM-DD'. OMÍTELA para hoy (el "
+                "sistema usa la fecha real del servidor). Inclúyela solo para días "
+                "distintos de hoy, calculándola a partir de la 'Fecha y hora "
+                "actuales' del contexto (p. ej. 'mañana' = ese día + 1)."
             ),
         }
     },
@@ -58,11 +63,20 @@ class ResumenAgendaSkill:
 
     ``tz`` es la zona horaria del usuario (de ``settings.bot_default_tz``): define
     qué es "hoy" y en qué hora local se presentan los eventos al LLM (Bloque 2.1).
+    ``now_fn`` es el reloj (inyectable para tests); por defecto el reloj real en
+    ``tz``. "Hoy" lo decide SIEMPRE el código con este reloj, nunca el LLM.
     """
 
-    def __init__(self, *, calendar: CalendarPort, tz: tzinfo = timezone.utc) -> None:
+    def __init__(
+        self,
+        *,
+        calendar: CalendarPort,
+        tz: tzinfo = timezone.utc,
+        now_fn: Callable[[], datetime] | None = None,
+    ) -> None:
         self._calendar = calendar
         self._tz = tz
+        self._now_fn = now_fn
 
     @property
     def name(self) -> str:
@@ -81,7 +95,7 @@ class ResumenAgendaSkill:
         if actor.impersonated_uid is None:
             return SkillResult.failure(_NO_IDENTITY_MSG)
 
-        day = _parse_day(args.get("fecha"), self._tz)
+        day = _parse_day(args.get("fecha"), self._tz, self._now_fn)
         if day is None:
             return SkillResult.failure(
                 "La fecha debe ir en formato ISO 'YYYY-MM-DD'."
@@ -105,10 +119,14 @@ class ResumenAgendaSkill:
         )
 
 
-def _parse_day(raw: Any, tz: tzinfo) -> date | None:
-    """``None``/vacío → hoy **en la zona del usuario**; ISO → ese día; inválido → ``None``."""
+def _parse_day(
+    raw: Any, tz: tzinfo, now_fn: Callable[[], datetime] | None = None
+) -> date | None:
+    """``None``/vacío → HOY en la zona del usuario (decidido por el CÓDIGO, nunca por
+    el LLM); ISO ``YYYY-MM-DD`` → ese día; inválido → ``None``."""
     if raw is None or not str(raw).strip():
-        return datetime.now(tz).date()
+        now = now_fn() if now_fn is not None else datetime.now(tz)
+        return now.date()
     try:
         return date.fromisoformat(str(raw).strip())
     except ValueError:

@@ -8,7 +8,9 @@ fallan o tools desconocidas, el tope de iteraciones y el registro en memoria.
 """
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -152,10 +154,10 @@ async def test_tool_result_is_appended_to_the_transcript():
 
     await _handle(service)
 
-    # La PRIMERA llamada ve solo L0 + user; la SEGUNDA, además, el turno de la
-    # tool-call del asistente y el turno con el resultado de la herramienta.
+    # La PRIMERA llamada ve L0 + fecha actual (slot L1/L2) + user; la SEGUNDA,
+    # además, el turno de la tool-call del asistente y el del resultado.
     first, second = llm.tool_calls_log
-    assert [type(m) for m in first] == [Message, Message]
+    assert [type(m) for m in first] == [Message, Message, Message]
     assert isinstance(second[-2], AssistantToolCallTurn)
     assert isinstance(second[-1], ToolResultTurn)
     result_turn = second[-1]
@@ -185,6 +187,39 @@ async def test_actor_context_resolves_impersonated_uid_from_actor_id():
     assert actor.role_scope == "corporate"
     # ADR-016: `users/<uid>` se resuelve al uid impersonable.
     assert actor.impersonated_uid == "alice"
+
+
+@pytest.mark.asyncio
+async def test_agent_context_includes_current_date_from_code():
+    # La fecha la pone el CÓDIGO (reloj inyectado), no el LLM: ancla anti-alucinación.
+    skill = FakeSkill()
+    llm = DualLLM(
+        tool_responses=[
+            LLMToolResponse(tool_calls=(ToolCall(id="c1", name="fake_tool", arguments={}),)),
+            LLMToolResponse(text="ok"),
+        ]
+    )
+    bogota = ZoneInfo("America/Bogota")
+    service = ConversationService(
+        llm=llm,
+        bot_mention_name=MENTION,
+        skills=_registry(skill),
+        tz=bogota,
+        now_fn=lambda: datetime(2026, 6, 30, 14, 30, tzinfo=bogota),
+    )
+
+    await _handle(service)
+
+    first = llm.tool_calls_log[0]
+    date_lines = [
+        m.content
+        for m in first
+        if isinstance(m, Message) and m.role == "system"
+        and m.content.startswith("Fecha y hora actuales:")
+    ]
+    assert len(date_lines) == 1
+    assert "martes 30 de junio de 2026" in date_lines[0]
+    assert "(America/Bogota)" in date_lines[0]
 
 
 @pytest.mark.asyncio
