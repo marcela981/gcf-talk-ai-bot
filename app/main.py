@@ -130,40 +130,66 @@ if settings.conversation_memory_enabled:
 else:
     logger.info("Memoria conversacional deshabilitada; modo Fase 1 (sin historia).")
 
-# --- ADR-017/ADR-018: motor de agente (tool-calling) + SkillRegistry --------
-# Composition root del catálogo de skills: alta de una skill = nueva clase +
-# `register(...)` AQUÍ; el motor (ConversationService) y el LLMPort NO se tocan
-# (OCP). Solo se cablea con `agent_ready` (= agent_enabled && rag_enabled), pues
-# la única skill del Bloque 1 (`consultar_base_conocimiento`) reutiliza el
-# embedder + vector store de RAG. Sin él, `skills=None` ⇒ el servicio degrada a
-# la ruta de texto puro (`complete`), con contexto L2 automático si hay RAG.
+# --- ADR-016/017/018: motor de agente (tool-calling) + SkillRegistry --------
+# Composition root del catálogo de skills. AGENT_ENABLED es el ÚNICO interruptor
+# maestro del modo agente (default false). El motor es agnóstico de capacidades
+# (ADR-017): el registry se puebla por la dependencia PROPIA de cada skill, NO por
+# un gate global:
+#   * KnowledgeBaseSkill -> sii rag_enabled (reusa embedder + vector store).
+#   * ResumenAgendaSkill -> sii appapi_ready (cliente CalDAV firmado propio; ADR-016).
+# El agente queda ACTIVO sii agent_enabled y el registry no está vacío; si no,
+# `skills=None` ⇒ el servicio degrada a la ruta Fase 1/2 (`complete`, con contexto
+# L2 automático si hay RAG). Alta de skill = nueva clase + `register(...)` AQUÍ; el
+# motor (ConversationService) y el LLMPort NO se tocan (OCP).
 _skills = None
-if settings.agent_ready:
-    from app.adapters.knowledge_base_skill import KnowledgeBaseSkill
+if settings.agent_enabled:
     from app.services.skill_registry import SkillRegistry
 
-    _skills = SkillRegistry()
-    _skills.register(
-        KnowledgeBaseSkill(
-            embedder=_embedder,
-            retrieval=_retrieval,
-            retrieval_policy=_retrieval_policy,
-            role_scope=settings.rag_default_role_scope,
+    _registry = SkillRegistry()
+
+    if settings.rag_enabled:
+        from app.adapters.knowledge_base_skill import KnowledgeBaseSkill
+
+        _registry.register(
+            KnowledgeBaseSkill(
+                embedder=_embedder,
+                retrieval=_retrieval,
+                retrieval_policy=_retrieval_policy,
+                role_scope=settings.rag_default_role_scope,
+            )
         )
-    )
-    logger.info(
-        "Motor de agente habilitado: %d skill(s) registrada(s); el LLM enruta por "
-        "tool-calling (tope %d iteraciones).",
-        len(_skills),
-        settings.agent_max_iterations,
-    )
+
+    if settings.appapi_ready:
+        from app.adapters.calendar_skill import ResumenAgendaSkill
+        from app.adapters.nextcloud_calendar_adapter import NextcloudCalendarAdapter
+
+        _calendar = NextcloudCalendarAdapter(
+            endpoint=settings.nextcloud_url,
+            app_id=settings.app_id,
+            app_version=settings.app_version,
+            app_secret=settings.app_secret,
+            aa_version=settings.aa_version,
+            dav_url_suffix=settings.dav_url_suffix,
+        )
+        _registry.register(ResumenAgendaSkill(calendar=_calendar))
+
+    if len(_registry) > 0:
+        _skills = _registry
+        logger.info(
+            "Motor de agente ACTIVO: %d skill(s) registrada(s); el LLM enruta por "
+            "tool-calling (tope %d iteraciones).",
+            len(_registry),
+            settings.agent_max_iterations,
+        )
+    else:
+        logger.info(
+            "AGENT_ENABLED=true pero sin skills cableables (rag_enabled=%s, "
+            "appapi_ready=%s); se degrada a la ruta de texto Fase 1/2.",
+            settings.rag_enabled,
+            settings.appapi_ready,
+        )
 else:
-    logger.info(
-        "Motor de agente deshabilitado (AGENT_ENABLED=%s, rag_enabled=%s); ruta de "
-        "texto puro.",
-        settings.agent_enabled,
-        settings.rag_enabled,
-    )
+    logger.info("Modo agente desactivado (AGENT_ENABLED=false); ruta Fase 1/2.")
 
 _service = ConversationService(
     llm=_adapter,

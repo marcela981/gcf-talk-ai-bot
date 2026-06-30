@@ -5,10 +5,11 @@ Adapter delgado que envuelve el pipeline RAG que YA existe (`EmbedderPort` +
 prueba end-to-end del tool-use loop sin tocar identidad:
 
 * **READ-ONLY**: solo embebe la consulta y hace `search` (SELECT); no muta nada.
-* **`role_scope` fijo `corporate`, app-only**: NO usa `actor.impersonated_uid`
-  (es `None` en el Bloque 1) ni deriva el scope del invocador. El scope real por
-  usuario llega en el Bloque 2 (ADR-011, hoy fijo). Recibe `ActorContext` por
-  contrato, pero esta skill concreta no necesita la identidad.
+* **`role_scope` fijo `corporate`, app-only**: NO usa `actor.impersonated_uid` ni
+  deriva el scope del invocador (a diferencia de la skill de calendario, que sí
+  impersona). El scope real por usuario es trabajo futuro (ADR-011, hoy fijo).
+  Recibe `ActorContext` por contrato, pero esta skill concreta no necesita la
+  identidad.
 
 Regla de capas (§3): toca infraestructura (vector store, embedder) ⇒ es un
 **adapter**, no dominio. Mantiene `execute` delgado y delega el I/O a los puertos.

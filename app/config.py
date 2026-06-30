@@ -54,23 +54,36 @@ class Settings:
     conversation_history_max_messages: int
     conversation_history_ttl_seconds: int
     # --- Motor de agente / tool-calling (ADR-017/ADR-018) --------------------
-    # Con `agent_enabled=True` y RAG cableado, la ruta de respuesta es el
-    # tool-use loop (las skills se ofrecen como tools). Con `False` —o sin RAG—
-    # el bot degrada a la ruta de texto puro de la Fase 1/2 (`complete`), con
-    # contexto L2 automático si RAG está disponible. El tope de iteraciones acota
-    # coste/latencia del loop.
+    # `agent_enabled` es el ÚNICO interruptor maestro del modo agente (default
+    # False; opt-in explícito en el deployment). NO está acoplado a RAG: el motor
+    # es agnóstico de capacidades (ADR-017) y cada skill se cablea según SU propia
+    # dependencia (RAG para la base de conocimiento, AppAPI para el calendario).
+    # Con el agente activo la respuesta sale del tool-use loop; si no, degrada a la
+    # ruta Fase 1/2 (`complete`, con contexto L2 automático si hay RAG). El tope de
+    # iteraciones acota coste/latencia del loop.
     agent_enabled: bool
     agent_max_iterations: int
+    # --- AppAPI / impersonation (ADR-016): identidad para skills de Nextcloud --
+    # AppAPI inyecta estas variables en el contenedor; nc_py_api las consume directo,
+    # pero las skills que construyen su PROPIO cliente firmado (p. ej. el calendario
+    # CalDAV) también las necesitan. Defaults vacíos: el import nunca falla por una
+    # var ausente; el adapter valida sus credenciales en su primer uso.
+    nextcloud_url: str
+    app_id: str
+    app_version: str
+    app_secret: str
+    aa_version: str
+    dav_url_suffix: str
 
     @property
-    def agent_ready(self) -> bool:
-        """True cuando procede cablear el motor de agente.
+    def appapi_ready(self) -> bool:
+        """True cuando hay config mínima para hablar con Nextcloud impersonando.
 
-        La única skill del Bloque 1 (`consultar_base_conocimiento`) necesita el
-        embedder + vector store, así que el agente requiere `rag_enabled`. Sin RAG
-        no hay skills útiles que ofrecer ⇒ se degrada a la ruta de texto puro.
+        La skill de calendario (CalDAV) construye su propio cliente firmado y
+        necesita la URL de Nextcloud + las credenciales del ExApp (APP_ID/APP_SECRET)
+        que AppAPI inyecta. Sin ellas, esa skill no se registra (degradación).
         """
-        return self.agent_enabled and self.rag_enabled
+        return bool(self.nextcloud_url and self.app_id and self.app_secret)
 
     @property
     def rag_enabled(self) -> bool:
@@ -117,6 +130,12 @@ def _load() -> Settings:
         ),
         agent_enabled=_env_bool("AGENT_ENABLED", False),
         agent_max_iterations=int(os.environ.get("AGENT_MAX_ITERATIONS", "5")),
+        nextcloud_url=os.environ.get("NEXTCLOUD_URL", ""),
+        app_id=os.environ.get("APP_ID", ""),
+        app_version=os.environ.get("APP_VERSION", ""),
+        app_secret=os.environ.get("APP_SECRET", ""),
+        aa_version=os.environ.get("AA_VERSION", "2.2.0"),
+        dav_url_suffix=os.environ.get("DAV_URL_SUFFIX", "remote.php/dav"),
     )
 
 

@@ -165,7 +165,7 @@ async def test_tool_result_is_appended_to_the_transcript():
 
 
 @pytest.mark.asyncio
-async def test_actor_context_is_corporate_and_unimpersonated_in_block1():
+async def test_actor_context_resolves_impersonated_uid_from_actor_id():
     skill = FakeSkill()
     llm = DualLLM(
         tool_responses=[
@@ -177,13 +177,14 @@ async def test_actor_context_is_corporate_and_unimpersonated_in_block1():
         llm=llm, bot_mention_name=MENTION, skills=_registry(skill)
     )
 
-    await _handle(service)
+    await _handle(service)  # actor_id = "users/alice"
 
     _, actor = skill.calls[0]
     assert actor.actor_id == "users/alice"
     assert actor.token == "room1"
     assert actor.role_scope == "corporate"
-    assert actor.impersonated_uid is None  # Bloque 1: identidad sin resolver
+    # ADR-016: `users/<uid>` se resuelve al uid impersonable.
+    assert actor.impersonated_uid == "alice"
 
 
 @pytest.mark.asyncio

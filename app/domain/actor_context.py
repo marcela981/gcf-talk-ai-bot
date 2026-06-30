@@ -6,14 +6,14 @@ it to every :meth:`~app.services.skill.Skill.execute` call, so *which identity a
 skill used* is an explicit parameter, not global state (refuerza ADR-003 y hace
 auditable la identidad).
 
-BLOQUE 1 (este código): la identidad real impersonada está **bloqueada por un
-spike pendiente** (ADR-016). Por eso:
+Identidad (ADR-016, spike cerrado — `docs/spikes/SPIKE_IMPERSONATION.md`):
 
 * ``role_scope`` es **fijo** ``"corporate"`` (consistente con ADR-011, scope fijo
-  en la ruta de petición).
-* ``impersonated_uid`` está **presente pero es ``None``**: el campo existe para no
-  romper el contrato cuando el Bloque 2 lo rellene con el uid resuelto; hoy nadie
-  lo consume y las skills read-only operan *app-only* (sin impersonation).
+  en la ruta de petición; la derivación por grupos del usuario es trabajo futuro).
+* ``impersonated_uid`` se **resuelve por request** desde el ``actor_id`` de Talk
+  (``app.domain.identity.resolve_impersonated_uid``): ``users/<uid>`` → ``<uid>``;
+  invitados/federados → ``None``. Una skill **con efectos/identidad** se rehúsa
+  cuando es ``None``; las skills *app-only* (p. ej. base de conocimiento) lo ignoran.
 """
 from __future__ import annotations
 
@@ -30,8 +30,8 @@ class ActorContext:
     * ``token``            — token de la sala de Talk desde la que se invoca.
     * ``role_scope``       — alcance de rol para filtrar datos. **Fijo**
       ``"corporate"`` en el Bloque 1.
-    * ``impersonated_uid`` — uid del usuario impersonado (ADR-016). **``None``**
-      en el Bloque 1; lo rellena el Bloque 2 tras cerrar el spike de identidad.
+    * ``impersonated_uid`` — uid del usuario impersonado (ADR-016), o ``None`` si el
+      invocador no tiene identidad local (invitado/federado). Resuelto por request.
     """
 
     actor_id: str

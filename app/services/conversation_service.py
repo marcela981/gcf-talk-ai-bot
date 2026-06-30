@@ -41,6 +41,7 @@ import logging
 from app.adapters.openai_adapter import LLMError
 from app.domain.actor_context import ActorContext
 from app.domain.context_assembly import assemble_context_block
+from app.domain.identity import resolve_impersonated_uid
 from app.domain.message import Message
 from app.domain.message_policy import should_reply, strip_invocation
 from app.domain.prompt_builder import build_messages
@@ -154,8 +155,10 @@ class ConversationService:
                     actor_id=actor_id,
                     token=token,
                     role_scope=self._role_scope,
-                    # Bloque 1: identidad impersonada bloqueada por spike (ADR-016).
-                    impersonated_uid=None,
+                    # ADR-016: identidad resuelta en la ruta del webhook. `users/<uid>`
+                    # → uid impersonable; invitados/federados → None (la skill con
+                    # efectos se rehúsa). Los `bots/` ya se filtraron (anti-loop).
+                    impersonated_uid=resolve_impersonated_uid(actor_id),
                 )
                 reply = await self._run_agent_loop(clean, snapshot, actor)
             else:
