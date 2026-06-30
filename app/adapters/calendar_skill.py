@@ -25,16 +25,19 @@ logger = logging.getLogger(__name__)
 
 _NAME = "consultar_calendario"
 _DESCRIPTION = (
-    "Consulta los eventos del calendario del usuario que te escribe, para un día. "
-    "Úsala cuando pregunte por su agenda o su disponibilidad, p. ej.: "
+    "Consulta los eventos del calendario del usuario que te escribe, para un día o "
+    "un rango de días. Incluye las ocurrencias de eventos recurrentes (reuniones "
+    "semanales, etc.). Úsala cuando pregunte por su agenda o disponibilidad, p. ej.: "
     "'¿qué tengo hoy?', 'resúmeme mi día', '¿qué reuniones tengo mañana?', "
-    "'¿estoy libre el martes?'. Devuelve la lista de eventos (título, inicio, fin) "
-    "del día indicado. SOLO lectura: no crea ni modifica eventos.\n"
-    "IMPORTANTE con la fecha: para HOY, OMITE el parámetro 'fecha' (lo resuelve el "
-    "sistema con la fecha real; no la inventes). Solo para un día distinto de hoy "
-    "('mañana', 'el viernes', una fecha explícita) pasa 'fecha' en ISO YYYY-MM-DD, "
-    "resolviéndola SIEMPRE respecto a la 'Fecha y hora actuales' del contexto, "
-    "nunca desde tu conocimiento previo."
+    "'¿estoy libre el martes?', '¿qué tengo esta semana?', 'mis próximos 10 días'. "
+    "Devuelve la lista de eventos (título, inicio, fin). SOLO lectura: no crea ni "
+    "modifica eventos.\n"
+    "FECHAS: para HOY, OMITE 'fecha' y 'fecha_fin' (el sistema usa la fecha real; no "
+    "la inventes). Para un día distinto pasa solo 'fecha' (ISO YYYY-MM-DD). Para un "
+    "RANGO pasa 'fecha' (inicio) y 'fecha_fin' (fin, inclusive): p. ej. 'esta semana' "
+    "o 'próximos 14 días' → fecha=hoy y fecha_fin=hoy+14. Calcula SIEMPRE las fechas "
+    "a partir de la 'Fecha y hora actuales' del contexto, nunca de tu conocimiento "
+    "previo."
 )
 _PARAMETERS_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -42,12 +45,19 @@ _PARAMETERS_SCHEMA: dict[str, Any] = {
         "fecha": {
             "type": "string",
             "description": (
-                "Día a consultar en formato ISO 'YYYY-MM-DD'. OMÍTELA para hoy (el "
-                "sistema usa la fecha real del servidor). Inclúyela solo para días "
-                "distintos de hoy, calculándola a partir de la 'Fecha y hora "
-                "actuales' del contexto (p. ej. 'mañana' = ese día + 1)."
+                "Día a consultar (o inicio del rango) en formato ISO 'YYYY-MM-DD'. "
+                "OMÍTELA para hoy. Calcúlala desde la 'Fecha y hora actuales' del "
+                "contexto (p. ej. 'mañana' = ese día + 1)."
             ),
-        }
+        },
+        "fecha_fin": {
+            "type": "string",
+            "description": (
+                "Fin del rango en ISO 'YYYY-MM-DD', INCLUSIVE. Inclúyela solo para "
+                "rangos de varios días (p. ej. 'esta semana', 'próximos N días'); "
+                "debe ser >= 'fecha'. Omítela para consultar un único día."
+            ),
+        },
     },
     "additionalProperties": False,
 }
@@ -91,27 +101,45 @@ class ResumenAgendaSkill:
         return _PARAMETERS_SCHEMA
 
     async def execute(self, args: dict[str, Any], actor: ActorContext) -> SkillResult:
-        """Rehúsa sin identidad; si la hay, lista los eventos del día via `CalendarPort`."""
+        """Rehúsa sin identidad; si la hay, lista eventos del día/rango via `CalendarPort`."""
         if actor.impersonated_uid is None:
             return SkillResult.failure(_NO_IDENTITY_MSG)
 
-        day = _parse_day(args.get("fecha"), self._tz, self._now_fn)
-        if day is None:
-            return SkillResult.failure(
-                "La fecha debe ir en formato ISO 'YYYY-MM-DD'."
-            )
+        # Inicio del rango: 'fecha', o HOY (decidido por el CÓDIGO con el reloj).
+        start_day = _parse_day(args.get("fecha"), self._tz, self._now_fn)
+        if start_day is None:
+            return SkillResult.failure("La fecha debe ir en formato ISO 'YYYY-MM-DD'.")
+
+        # Fin del rango: 'fecha_fin' (inclusive) o el mismo día (consulta de un día).
+        end_raw = args.get("fecha_fin")
+        if end_raw is None or not str(end_raw).strip():
+            end_day = start_day
+        else:
+            end_day = _parse_iso(end_raw)
+            if end_day is None:
+                return SkillResult.failure(
+                    "La fecha_fin debe ir en formato ISO 'YYYY-MM-DD'."
+                )
+            if end_day < start_day:
+                return SkillResult.failure(
+                    "El rango es inválido: 'fecha_fin' no puede ser anterior a 'fecha'."
+                )
 
         try:
             events = await self._calendar.list_events(
-                actor.impersonated_uid, DateRange.for_day(day, tz=self._tz)
+                actor.impersonated_uid,
+                DateRange.for_range(start_day, end_day, tz=self._tz),
             )
         except Exception as exc:  # noqa: BLE001 — devolver el fallo como dato (ADR-018)
-            logger.exception("Consulta de calendario falló para el día %s.", day)
+            logger.exception(
+                "Consulta de calendario falló para %s..%s.", start_day, end_day
+            )
             return SkillResult.failure(f"Error consultando el calendario: {exc}")
 
         return SkillResult.success(
             {
-                "fecha": day.isoformat(),
+                "desde": start_day.isoformat(),
+                "hasta": end_day.isoformat(),
                 "zona_horaria": _tz_label(self._tz),
                 "total": len(events),
                 "eventos": [_event_to_dict(e, self._tz) for e in events],
@@ -127,6 +155,11 @@ def _parse_day(
     if raw is None or not str(raw).strip():
         now = now_fn() if now_fn is not None else datetime.now(tz)
         return now.date()
+    return _parse_iso(raw)
+
+
+def _parse_iso(raw: Any) -> date | None:
+    """ISO ``YYYY-MM-DD`` → ``date``; cualquier otra cosa → ``None``."""
     try:
         return date.fromisoformat(str(raw).strip())
     except ValueError:

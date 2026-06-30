@@ -20,10 +20,16 @@ class CalendarPort(Protocol):
     async def list_events(
         self, uid: str, date_range: DateRange
     ) -> list[CalendarEvent]:
-        """Eventos del usuario ``uid`` que caen en ``date_range``.
+        """Eventos del usuario ``uid`` cuyo inicio cae en ``date_range`` ``[start, end)``.
 
-        La implementación actúa **impersonando** a ``uid`` (ADR-016). Puede lanzar
-        un error propio del adapter ante fallo de transporte/HTTP; el llamador
-        (la skill) lo traduce a un ``SkillResult.failure`` para el loop (ADR-017).
+        El ``DateRange`` (UTC-aware, framed en la tz del usuario) puede cubrir un
+        solo día (:meth:`DateRange.for_day`) o varios (:meth:`DateRange.for_range`),
+        p. ej. "esta semana" o "próximos N días". La implementación incluye las
+        **ocurrencias de eventos recurrentes** dentro del rango (expansión), no solo
+        los eventos maestros.
+
+        Actúa **impersonando** a ``uid`` (ADR-016). Puede lanzar un error propio del
+        adapter ante fallo de transporte/HTTP; el llamador (la skill) lo traduce a un
+        ``SkillResult.failure`` para el loop (ADR-017).
         """
         ...

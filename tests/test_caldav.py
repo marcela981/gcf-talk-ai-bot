@@ -85,6 +85,23 @@ def test_build_calendar_query_time_range_is_utc_framed_in_user_zone():
     assert "VEVENT" in body and "calendar-data" in body
 
 
+def test_build_calendar_query_requests_server_side_expand():
+    # Expansión server-side de recurrencias: <c:expand> con el mismo rango UTC.
+    body = build_calendar_query(DateRange.for_day(date(2026, 6, 30), tz=BOGOTA))
+
+    assert '<c:expand start="20260630T050000Z" end="20260701T050000Z"/>' in body
+
+
+def test_build_calendar_query_spans_a_multi_day_range():
+    body = build_calendar_query(
+        DateRange.for_range(date(2026, 6, 30), date(2026, 7, 13), tz=BOGOTA)
+    )
+
+    # [30 jun 00:00, 14 jul 00:00) local -5 → [05:00Z 30 jun, 05:00Z 14 jul).
+    assert 'start="20260630T050000Z"' in body
+    assert 'end="20260714T050000Z"' in body
+
+
 # --- Normalización de DTSTART/DTEND a UTC -------------------------------------
 
 
@@ -189,6 +206,69 @@ def test_parse_events_empty_when_no_calendar_data():
         'xmlns:cal="urn:ietf:params:xml:ns:caldav"></d:multistatus>'
     )
     assert parse_events(xml, tz=BOGOTA) == []
+
+
+# --- Recurrencias: expansión, dedup y detección de no-expansión ---------------
+
+
+def test_expanded_occurrences_same_uid_are_all_kept():
+    # Lo que devuelve un servidor que SÍ expande: una instancia por ocurrencia,
+    # mismo UID, RECURRENCE-ID distinto, sin RRULE.
+    ical = (
+        "BEGIN:VCALENDAR\n"
+        "BEGIN:VEVENT\nUID:wk@x\nSUMMARY:Semanal\n"
+        "DTSTART:20260701T140000Z\nRECURRENCE-ID:20260701T140000Z\nEND:VEVENT\n"
+        "BEGIN:VEVENT\nUID:wk@x\nSUMMARY:Semanal\n"
+        "DTSTART:20260708T140000Z\nRECURRENCE-ID:20260708T140000Z\nEND:VEVENT\n"
+        "END:VCALENDAR"
+    )
+    events = parse_events(_report_with(ical), tz=BOGOTA)
+
+    assert [e.start for e in events] == [
+        datetime(2026, 7, 1, 14, 0, tzinfo=timezone.utc),
+        datetime(2026, 7, 8, 14, 0, tzinfo=timezone.utc),
+    ]
+    assert all(e.recurring is False for e in events)  # instancias, no maestro
+
+
+def test_dedup_collapses_instance_and_override_same_recurrence_id():
+    # Misma ocurrencia (UID + RECURRENCE-ID) llega dos veces (instancia + override):
+    # se conserva una sola (evita el doble-conteo visto en smoke).
+    ical = (
+        "BEGIN:VCALENDAR\n"
+        "BEGIN:VEVENT\nUID:wk@x\nSUMMARY:Semanal\n"
+        "DTSTART:20260701T140000Z\nRECURRENCE-ID:20260701T140000Z\nEND:VEVENT\n"
+        "BEGIN:VEVENT\nUID:wk@x\nSUMMARY:Semanal (movida)\n"
+        "DTSTART:20260701T150000Z\nRECURRENCE-ID:20260701T140000Z\nEND:VEVENT\n"
+        "END:VCALENDAR"
+    )
+    events = parse_events(_report_with(ical), tz=BOGOTA)
+
+    assert len(events) == 1
+
+
+def test_same_uid_without_recurrence_id_not_collapsed_by_distinct_start():
+    # Sin RECURRENCE-ID, se distingue por el inicio concreto: no se colapsan.
+    ical = (
+        "BEGIN:VCALENDAR\n"
+        "BEGIN:VEVENT\nUID:wk@x\nSUMMARY:A\nDTSTART:20260701T140000Z\nEND:VEVENT\n"
+        "BEGIN:VEVENT\nUID:wk@x\nSUMMARY:B\nDTSTART:20260708T140000Z\nEND:VEVENT\n"
+        "END:VCALENDAR"
+    )
+    events = parse_events(_report_with(ical), tz=BOGOTA)
+
+    assert [e.summary for e in events] == ["A", "B"]
+
+
+def test_master_with_rrule_is_flagged_recurring():
+    # Lo que devuelve un servidor que NO expande: el maestro con su RRULE intacta.
+    ical = (
+        "BEGIN:VEVENT\nUID:wk@x\nSUMMARY:Semanal maestro\n"
+        "DTSTART:20260101T140000Z\nRRULE:FREQ=WEEKLY\nEND:VEVENT"
+    )
+    ev = _one_event(ical, tz=BOGOTA)
+
+    assert ev.recurring is True
 
 
 # --- Pertenencia al "día" del usuario (aware vs aware, cruce por offset -5) ----

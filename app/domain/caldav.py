@@ -10,9 +10,19 @@ la reconciliación tiktoken↔capas de ARCHITECTURE §3).
 from __future__ import annotations
 
 import xml.etree.ElementTree as ET
+from dataclasses import dataclass
 from datetime import datetime, timezone, tzinfo
 
 from app.domain.calendar import CalendarEvent, DateRange, to_zoneinfo
+
+
+@dataclass(frozen=True)
+class _RawVEvent:
+    """VEVENT parseado + claves de identidad para deduplicar (uso interno)."""
+
+    event: CalendarEvent
+    uid: str | None
+    recurrence_id: str | None
 
 _DAV_NS = "{DAV:}"
 _CALDAV_NS = "{urn:ietf:params:xml:ns:caldav}"
@@ -38,15 +48,26 @@ def _ical_utc(dt: datetime) -> str:
 
 
 def build_calendar_query(date_range: DateRange) -> str:
-    """REPORT ``calendar-query`` que pide los VEVENT en ``[start, end)`` con su data."""
+    """REPORT ``calendar-query`` con ``time-range`` + expansión SERVER-SIDE de recurrencias.
+
+    El ``<c:expand>`` (RFC 4791 §9.6.5) pide al servidor que **genere las ocurrencias
+    concretas** de los eventos recurrentes dentro de ``[start, end)`` y devuelva cada
+    una como un VEVENT instancia (sin ``RRULE``), en vez del único VEVENT maestro
+    (cuyo ``DTSTART`` original suele caer fuera del rango). Así las consultas a fechas
+    futuras ven las repeticiones. NO se implementa motor RRULE en cliente: si el
+    servidor ignora ``<c:expand>``, el adapter lo detecta y avisa (deuda explícita).
+    """
+    start = _ical_utc(date_range.start)
+    end = _ical_utc(date_range.end)
     return (
         '<?xml version="1.0" encoding="utf-8"?>'
         '<c:calendar-query xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">'
-        "<d:prop><d:getetag/><c:calendar-data/></d:prop>"
+        "<d:prop><c:calendar-data>"
+        f'<c:expand start="{start}" end="{end}"/>'
+        "</c:calendar-data></d:prop>"
         '<c:filter><c:comp-filter name="VCALENDAR">'
         '<c:comp-filter name="VEVENT">'
-        f'<c:time-range start="{_ical_utc(date_range.start)}"'
-        f' end="{_ical_utc(date_range.end)}"/>'
+        f'<c:time-range start="{start}" end="{end}"/>'
         "</c:comp-filter></c:comp-filter></c:filter>"
         "</c:calendar-query>"
     )
@@ -76,17 +97,36 @@ def parse_calendar_hrefs(multistatus_xml: str) -> list[str]:
 def parse_events(
     multistatus_xml: str, *, tz: tzinfo, calendar: str | None = None
 ) -> list[CalendarEvent]:
-    """Extrae y normaliza a **UTC-aware** los VEVENT de un multistatus ``calendar-query``.
+    """Extrae, normaliza a **UTC-aware** y **deduplica** los VEVENT de un ``calendar-query``.
 
     ``tz`` es la zona del usuario: se usa para interpretar las horas flotantes (sin
     ``Z`` ni ``TZID``) y para enmarcar los eventos ``VALUE=DATE`` (todo-el-día) como
     el día local completo. Las horas con ``Z`` o ``TZID`` traen su propia zona.
+
+    DEDUP por ``(UID, RECURRENCE-ID)``: la expansión server-side puede devolver una
+    ocurrencia tanto como instancia regular como su *override* (mismo ``RECURRENCE-ID``)
+    — se conserva la primera y se evita el doble-conteo visto en smoke. Las ocurrencias
+    distintas de una serie (mismo ``UID``, ``RECURRENCE-ID`` distinto) se conservan
+    todas. Los VEVENT sin ``UID`` nunca se colapsan.
     """
     root = ET.fromstring(multistatus_xml)
-    events: list[CalendarEvent] = []
+    raws: list[_RawVEvent] = []
     for data_el in root.iter(f"{_CALDAV_NS}calendar-data"):
         if data_el.text:
-            events.extend(_parse_vevents(data_el.text, calendar=calendar, tz=tz))
+            raws.extend(_parse_vevents(data_el.text, calendar=calendar, tz=tz))
+
+    events: list[CalendarEvent] = []
+    seen: set[tuple[str, str]] = set()
+    for raw in raws:
+        if raw.uid is not None:
+            # Sin RECURRENCE-ID (maestro/instancia sin recid), se distingue por el
+            # inicio concreto para no colapsar ocurrencias expandidas de un mismo UID.
+            occurrence = raw.recurrence_id or raw.event.start.isoformat()
+            key = (raw.uid, occurrence)
+            if key in seen:
+                continue
+            seen.add(key)
+        events.append(raw.event)
     return events
 
 
@@ -162,29 +202,42 @@ def _parse_ical_datetime(
 
 def _parse_vevents(
     ical_text: str, *, calendar: str | None, tz: tzinfo
-) -> list[CalendarEvent]:
-    """Recorre el VCALENDAR y emite un CalendarEvent por cada VEVENT con DTSTART válido."""
-    events: list[CalendarEvent] = []
+) -> list[_RawVEvent]:
+    """Recorre el VCALENDAR y emite un `_RawVEvent` por cada VEVENT con DTSTART válido.
+
+    Captura ``UID`` y ``RECURRENCE-ID`` para deduplicar aguas arriba, y marca
+    ``recurring=True`` si el VEVENT trae ``RRULE`` (maestro sin expandir).
+    """
+    raws: list[_RawVEvent] = []
     in_event = False
     summary = ""
+    uid: str | None = None
+    recurrence_id: str | None = None
+    has_rrule = False
     dtstart: tuple[datetime, bool] | None = None
     dtend: tuple[datetime, bool] | None = None
 
     for line in _unfold(ical_text):
         stripped = line.strip()
         if stripped == "BEGIN:VEVENT":
-            in_event, summary, dtstart, dtend = True, "", None, None
+            in_event, summary, uid, recurrence_id, has_rrule = True, "", None, None, False
+            dtstart = dtend = None
             continue
         if stripped == "END:VEVENT":
             if dtstart is not None:
                 start_dt, all_day = dtstart
-                events.append(
-                    CalendarEvent(
-                        summary=summary or "(sin título)",
-                        start=start_dt,
-                        end=dtend[0] if dtend is not None else None,
-                        all_day=all_day,
-                        calendar=calendar,
+                raws.append(
+                    _RawVEvent(
+                        event=CalendarEvent(
+                            summary=summary or "(sin título)",
+                            start=start_dt,
+                            end=dtend[0] if dtend is not None else None,
+                            all_day=all_day,
+                            calendar=calendar,
+                            recurring=has_rrule,
+                        ),
+                        uid=uid,
+                        recurrence_id=recurrence_id,
                     )
                 )
             in_event = False
@@ -198,9 +251,15 @@ def _parse_vevents(
         prop = name.split(";", 1)[0].upper()
         if prop == "SUMMARY":
             summary = _unescape(value)
+        elif prop == "UID":
+            uid = value.strip() or None
+        elif prop == "RECURRENCE-ID":
+            recurrence_id = value.strip() or None
+        elif prop == "RRULE":
+            has_rrule = True
         elif prop == "DTSTART":
             dtstart = _parse_ical_datetime(name, value, tz)
         elif prop == "DTEND":
             dtend = _parse_ical_datetime(name, value, tz)
 
-    return events
+    return raws

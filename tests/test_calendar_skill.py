@@ -69,7 +69,9 @@ async def test_delegates_with_user_zone_range_and_presents_local_time():
     result = await skill.execute({"fecha": "2026-06-30"}, _USER)
 
     assert result.ok
-    assert result.data["fecha"] == "2026-06-30"
+    # Un solo día: desde == hasta.
+    assert result.data["desde"] == "2026-06-30"
+    assert result.data["hasta"] == "2026-06-30"
     assert result.data["zona_horaria"] == "America/Bogota"
     assert result.data["total"] == 1
     # La hora se devuelve en LOCAL del usuario, no en UTC.
@@ -83,6 +85,50 @@ async def test_delegates_with_user_zone_range_and_presents_local_time():
 
 
 @pytest.mark.asyncio
+async def test_range_query_uses_for_range_inclusive():
+    calendar = FakeCalendar()
+    skill = ResumenAgendaSkill(calendar=calendar, tz=BOGOTA)
+
+    result = await skill.execute(
+        {"fecha": "2026-06-30", "fecha_fin": "2026-07-13"}, _USER
+    )
+
+    assert result.ok
+    assert result.data["desde"] == "2026-06-30"
+    assert result.data["hasta"] == "2026-07-13"
+    _, rng = calendar.calls[0]
+    assert rng == DateRange.for_range(date(2026, 6, 30), date(2026, 7, 13), tz=BOGOTA)
+
+
+@pytest.mark.asyncio
+async def test_invalid_fecha_fin_is_a_failure():
+    calendar = FakeCalendar()
+    skill = ResumenAgendaSkill(calendar=calendar, tz=BOGOTA)
+
+    result = await skill.execute(
+        {"fecha": "2026-06-30", "fecha_fin": "13/07/2026"}, _USER
+    )
+
+    assert not result.ok
+    assert "fecha_fin" in result.error
+    assert calendar.calls == []
+
+
+@pytest.mark.asyncio
+async def test_fecha_fin_before_fecha_is_a_failure():
+    calendar = FakeCalendar()
+    skill = ResumenAgendaSkill(calendar=calendar, tz=BOGOTA)
+
+    result = await skill.execute(
+        {"fecha": "2026-07-13", "fecha_fin": "2026-06-30"}, _USER
+    )
+
+    assert not result.ok
+    assert "rango" in result.error.lower()
+    assert calendar.calls == []
+
+
+@pytest.mark.asyncio
 async def test_defaults_to_today_in_user_zone_from_code_clock():
     # "Hoy" lo decide el CÓDIGO con el reloj (inyectado para determinismo), no el LLM.
     calendar = FakeCalendar()
@@ -92,7 +138,8 @@ async def test_defaults_to_today_in_user_zone_from_code_clock():
     result = await skill.execute({}, _USER)  # sin 'fecha'
 
     assert result.ok
-    assert result.data["fecha"] == "2026-06-30"
+    assert result.data["desde"] == "2026-06-30"
+    assert result.data["hasta"] == "2026-06-30"
     _, rng = calendar.calls[0]
     assert rng == DateRange.for_day(date(2026, 6, 30), tz=BOGOTA)
 
@@ -110,7 +157,8 @@ async def test_explicit_fecha_is_respected_over_clock():
     result = await skill.execute({"fecha": "2026-07-15"}, _USER)
 
     assert result.ok
-    assert result.data["fecha"] == "2026-07-15"
+    assert result.data["desde"] == "2026-07-15"
+    assert result.data["hasta"] == "2026-07-15"
     _, rng = calendar.calls[0]
     assert rng == DateRange.for_day(date(2026, 7, 15), tz=BOGOTA)
 
@@ -142,4 +190,5 @@ def test_tool_schema_is_public_contract():
 
     assert skill.name == "consultar_calendario"
     assert skill.parameters_schema["additionalProperties"] is False
-    assert "fecha" in skill.parameters_schema["properties"]
+    props = skill.parameters_schema["properties"]
+    assert "fecha" in props and "fecha_fin" in props

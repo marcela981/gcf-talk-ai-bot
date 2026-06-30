@@ -49,13 +49,24 @@ class DateRange:
     def for_day(cls, day: date, *, tz: tzinfo = timezone.utc) -> "DateRange":
         """Rango del día completo **en la zona ``tz``**: ``[00:00 local, 24:00 local)``.
 
-        Las fronteras se construyen como medianoche local del día y del día
-        siguiente, y se exponen convertidas a UTC para filtrar contra instantes
-        aware. Nada de fronteras naive ni en UTC fijo (corrige la deuda de
-        encuadre temporal del Bloque 2).
+        Helper del caso "un día" (atajo de :meth:`for_range` con el mismo día como
+        inicio y fin). Las fronteras son medianoche local del día y del siguiente,
+        expuestas en UTC para filtrar contra instantes aware.
         """
-        start_local = datetime.combine(day, time.min, tzinfo=tz)
-        end_local = datetime.combine(day + timedelta(days=1), time.min, tzinfo=tz)
+        return cls.for_range(day, day, tz=tz)
+
+    @classmethod
+    def for_range(
+        cls, start_day: date, end_day: date, *, tz: tzinfo = timezone.utc
+    ) -> "DateRange":
+        """Rango ``[start_day 00:00 local, end_day+1 00:00 local)`` en la zona ``tz``.
+
+        Ambos extremos son **inclusivos por día**: ``for_range(d, d)`` cubre justo
+        ese día; ``for_range(hoy, hoy+14d)`` cubre los 15 días (hoy..hoy+14). Las
+        fronteras se construyen como medianoche local y se exponen en UTC.
+        """
+        start_local = datetime.combine(start_day, time.min, tzinfo=tz)
+        end_local = datetime.combine(end_day + timedelta(days=1), time.min, tzinfo=tz)
         return cls(
             start=start_local.astimezone(timezone.utc),
             end=end_local.astimezone(timezone.utc),
@@ -71,12 +82,16 @@ class DateRange:
 class CalendarEvent:
     """Un evento de calendario ya normalizado desde iCalendar.
 
-    * ``summary``  — título del evento.
-    * ``start``    — inicio, SIEMPRE **UTC-aware** (para todo-el-día, la medianoche
+    * ``summary``   — título del evento.
+    * ``start``     — inicio, SIEMPRE **UTC-aware** (para todo-el-día, la medianoche
       local del día convertida a UTC).
-    * ``end``      — fin UTC-aware, o ``None`` si el VEVENT no lo trae.
-    * ``all_day``  — ``True`` para eventos ``VALUE=DATE`` (sin hora).
-    * ``calendar`` — pista del calendario de origen (último segmento del href).
+    * ``end``       — fin UTC-aware, o ``None`` si el VEVENT no lo trae.
+    * ``all_day``   — ``True`` para eventos ``VALUE=DATE`` (sin hora).
+    * ``calendar``  — pista del calendario de origen (último segmento del href).
+    * ``recurring`` — ``True`` si el VEVENT traía un ``RRULE`` (es el *maestro* de
+      una serie SIN expandir). Las ocurrencias expandidas por el servidor llegan
+      como instancias concretas con ``recurring=False``. Sirve de señal de que la
+      expansión server-side (``<C:expand>``) NO se honró (ver el adapter CalDAV).
     """
 
     summary: str
@@ -84,3 +99,4 @@ class CalendarEvent:
     end: datetime | None = None
     all_day: bool = False
     calendar: str | None = None
+    recurring: bool = False

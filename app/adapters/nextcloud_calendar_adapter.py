@@ -6,9 +6,14 @@ SIN tocar el adaptador privado ``nc._session.adapter`` (deuda **D-IMP-1** de
 ADR-016). El ``app_secret`` **NUNCA** se loguea.
 
 Flujo (read-only): PROPFIND ``/calendars/<uid>/`` (Depth 1) para descubrir las
-colecciones-calendario, y un REPORT ``calendar-query`` con filtro ``time-range`` por
-cada calendario. El parseo del multistatus/iCal se **delega** a ``domain.caldav``
-(puro, testeable offline). El ``transport`` es inyectable para tests sin red.
+colecciones-calendario, y por cada una un REPORT ``calendar-query`` con ``time-range``
++ **expansión server-side** (``<C:expand>``) de las recurrencias. La expansión hace
+que las consultas a fechas futuras vean las ocurrencias de eventos recurrentes (el
+maestro tiene su ``DTSTART`` en el pasado y no caería en el rango). NO se implementa
+motor RRULE en cliente: si el servidor ignora ``<C:expand>`` (devuelve maestros con
+``RRULE``), se registra un warning y se devuelve lo disponible (deuda explícita).
+El parseo del multistatus/iCal se **delega** a ``domain.caldav`` (puro, testeable
+offline). El ``transport`` es inyectable para tests sin red.
 
 Regla de capas (§3): toca infraestructura (red, CalDAV) ⇒ es un **adapter**; habla
 con el resto del sistema solo a través del contrato `CalendarPort` y los value
@@ -127,12 +132,24 @@ class NextcloudCalendarAdapter:
                     )
                 )
 
-        # Filtro de pertenencia al día aware-vs-aware: el time-range del servidor es
+        # Si llegó algún maestro con RRULE, el servidor NO honró <C:expand>: las
+        # ocurrencias futuras faltarán. Se avisa y se devuelve lo disponible; NO se
+        # expande en cliente (deuda explícita, fuera de scope).
+        if any(e.recurring for e in events):
+            logger.warning(
+                "El servidor CalDAV no expandió las recurrencias (<C:expand> "
+                "ignorado): llegaron maestros con RRULE para uid=%s. Las ocurrencias "
+                "futuras de eventos recurrentes pueden faltar (deuda: sin expansión "
+                "en cliente).",
+                uid,
+            )
+
+        # Filtro de pertenencia al rango aware-vs-aware: el time-range del servidor es
         # una criba gruesa; aquí se confirma que el inicio cae en la ventana local
         # del usuario (defensa frente a bordes/expansiones del servidor).
-        in_day = [e for e in events if date_range.contains(e.start)]
-        in_day.sort(key=lambda e: (e.start, e.summary))
-        return in_day
+        in_range = [e for e in events if date_range.contains(e.start)]
+        in_range.sort(key=lambda e: (e.start, e.summary))
+        return in_range
 
     def _headers(self, uid: str) -> dict[str, str]:
         """Cabeceras AppAPI firmadas que impersonan a ``uid``. El secreto no se loguea."""
