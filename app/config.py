@@ -53,6 +53,24 @@ class Settings:
     conversation_memory_enabled: bool
     conversation_history_max_messages: int
     conversation_history_ttl_seconds: int
+    # --- Motor de agente / tool-calling (ADR-017/ADR-018) --------------------
+    # Con `agent_enabled=True` y RAG cableado, la ruta de respuesta es el
+    # tool-use loop (las skills se ofrecen como tools). Con `False` —o sin RAG—
+    # el bot degrada a la ruta de texto puro de la Fase 1/2 (`complete`), con
+    # contexto L2 automático si RAG está disponible. El tope de iteraciones acota
+    # coste/latencia del loop.
+    agent_enabled: bool
+    agent_max_iterations: int
+
+    @property
+    def agent_ready(self) -> bool:
+        """True cuando procede cablear el motor de agente.
+
+        La única skill del Bloque 1 (`consultar_base_conocimiento`) necesita el
+        embedder + vector store, así que el agente requiere `rag_enabled`. Sin RAG
+        no hay skills útiles que ofrecer ⇒ se degrada a la ruta de texto puro.
+        """
+        return self.agent_enabled and self.rag_enabled
 
     @property
     def rag_enabled(self) -> bool:
@@ -97,6 +115,8 @@ def _load() -> Settings:
         conversation_history_ttl_seconds=int(
             os.environ.get("CONVERSATION_HISTORY_TTL_SECONDS", "3600")
         ),
+        agent_enabled=_env_bool("AGENT_ENABLED", False),
+        agent_max_iterations=int(os.environ.get("AGENT_MAX_ITERATIONS", "5")),
     )
 
 

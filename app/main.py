@@ -130,6 +130,41 @@ if settings.conversation_memory_enabled:
 else:
     logger.info("Memoria conversacional deshabilitada; modo Fase 1 (sin historia).")
 
+# --- ADR-017/ADR-018: motor de agente (tool-calling) + SkillRegistry --------
+# Composition root del catálogo de skills: alta de una skill = nueva clase +
+# `register(...)` AQUÍ; el motor (ConversationService) y el LLMPort NO se tocan
+# (OCP). Solo se cablea con `agent_ready` (= agent_enabled && rag_enabled), pues
+# la única skill del Bloque 1 (`consultar_base_conocimiento`) reutiliza el
+# embedder + vector store de RAG. Sin él, `skills=None` ⇒ el servicio degrada a
+# la ruta de texto puro (`complete`), con contexto L2 automático si hay RAG.
+_skills = None
+if settings.agent_ready:
+    from app.adapters.knowledge_base_skill import KnowledgeBaseSkill
+    from app.services.skill_registry import SkillRegistry
+
+    _skills = SkillRegistry()
+    _skills.register(
+        KnowledgeBaseSkill(
+            embedder=_embedder,
+            retrieval=_retrieval,
+            retrieval_policy=_retrieval_policy,
+            role_scope=settings.rag_default_role_scope,
+        )
+    )
+    logger.info(
+        "Motor de agente habilitado: %d skill(s) registrada(s); el LLM enruta por "
+        "tool-calling (tope %d iteraciones).",
+        len(_skills),
+        settings.agent_max_iterations,
+    )
+else:
+    logger.info(
+        "Motor de agente deshabilitado (AGENT_ENABLED=%s, rag_enabled=%s); ruta de "
+        "texto puro.",
+        settings.agent_enabled,
+        settings.rag_enabled,
+    )
+
 _service = ConversationService(
     llm=_adapter,
     bot_mention_name=settings.bot_mention_name,
@@ -137,6 +172,8 @@ _service = ConversationService(
     retrieval=_retrieval,
     retrieval_policy=_retrieval_policy,
     memory=_memory,
+    skills=_skills,
+    agent_max_iterations=settings.agent_max_iterations,
     role_scope=settings.rag_default_role_scope,
 )
 
@@ -221,19 +258,6 @@ if os.environ.get("SPIKE_FILES_ENABLED") == "1":
     @APP.post("/debug/files-spike")  # SPIKE — REMOVE BEFORE MERGE
     async def _debug_files_spike() -> dict:
         return await run_spike()
-# SPIKE END -------------------------------------------------------------------
-
-
-# SPIKE — REMOVE BEFORE MERGE -------------------------------------------------
-# Impersonation spike router (ADR-016): can the ExApp impersonate the invoking
-# user against Calendar (CalDAV) and Deck (REST)? Read-only. Gated by an env var
-# so the route is not registered in production. NOTE: this router is NOT added
-# to AppAPIAuthMiddleware's `disable_for`, so the HTTP route stays behind the
-# shared-secret middleware; prefer `python -m app._spike.impersonation` to run.
-if os.environ.get("SPIKE_IMPERSONATION_ENABLED") == "1":
-    from app._spike.impersonation.router import router as _impersonation_router
-
-    APP.include_router(_impersonation_router)  # SPIKE — REMOVE BEFORE MERGE
 # SPIKE END -------------------------------------------------------------------
 
 
