@@ -1,13 +1,17 @@
-"""Unit tests for app.domain.caldav (ADR-016): parseo CalDAV/iCal puro, sin red.
+"""Unit tests for app.domain.caldav (ADR-016 / Bloque 2.1): parseo CalDAV/iCal puro.
 
-Cubre lo que el adapter delega al dominio: descubrir los hrefs de calendarios desde
-un multistatus PROPFIND (portado del spike), construir el REPORT calendar-query con
-el time-range correcto, y parsear los VEVENT (UTC, todo-el-día, line-folding y
-escapes) a `CalendarEvent`.
+Sin red. Cubre lo que el adapter delega al dominio: descubrir hrefs de calendarios
+(PROPFIND, portado del spike), construir el REPORT calendar-query con el time-range
+UTC correcto, y parsear los VEVENT a `CalendarEvent` SIEMPRE en UTC-aware. El foco
+nuevo es la **zona horaria**: el "día" se enmarca en la zona del usuario y los
+DTSTART (Z / TZID / VALUE=DATE / flotante) se normalizan a UTC; la pertenencia al
+día se compara aware-vs-aware (DateRange.contains), cubriendo el cruce de día por el
+offset -5 de America/Bogota (el bug confirmado en smoke).
 """
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+from zoneinfo import ZoneInfo
 
 from app.domain.caldav import (
     build_calendar_query,
@@ -15,6 +19,8 @@ from app.domain.caldav import (
     parse_events,
 )
 from app.domain.calendar import DateRange
+
+BOGOTA = ZoneInfo("America/Bogota")  # UTC-5, sin DST
 
 _PROPFIND_MULTISTATUS = """<?xml version="1.0"?>
 <d:multistatus xmlns:d="DAV:" xmlns:cal="urn:ietf:params:xml:ns:caldav">
@@ -41,6 +47,25 @@ _PROPFIND_MULTISTATUS = """<?xml version="1.0"?>
 </d:multistatus>"""
 
 
+def _report_with(ical_body: str) -> str:
+    return (
+        '<?xml version="1.0"?>'
+        '<d:multistatus xmlns:d="DAV:" xmlns:cal="urn:ietf:params:xml:ns:caldav">'
+        "<d:response><d:href>/x.ics</d:href><d:propstat><d:prop>"
+        f"<cal:calendar-data>{ical_body}</cal:calendar-data>"
+        "</d:prop></d:propstat></d:response>"
+        "</d:multistatus>"
+    )
+
+
+def _one_event(ical_body: str, *, tz=BOGOTA):
+    (event,) = parse_events(_report_with(ical_body), tz=tz)
+    return event
+
+
+# --- Descubrimiento y construcción de la query --------------------------------
+
+
 def test_parse_calendar_hrefs_skips_home_and_non_calendars():
     hrefs = parse_calendar_hrefs(_PROPFIND_MULTISTATUS)
 
@@ -51,23 +76,16 @@ def test_parse_calendar_hrefs_skips_home_and_non_calendars():
     ]
 
 
-def test_build_calendar_query_has_utc_time_range():
-    body = build_calendar_query(DateRange.for_day(date(2026, 6, 30)))
+def test_build_calendar_query_time_range_is_utc_framed_in_user_zone():
+    # El día local de Bogotá [00:00, 24:00) -5 son [05:00Z, 05:00Z del día siguiente).
+    body = build_calendar_query(DateRange.for_day(date(2026, 6, 30), tz=BOGOTA))
 
-    assert 'start="20260630T000000Z"' in body
-    assert 'end="20260701T000000Z"' in body
+    assert 'start="20260630T050000Z"' in body
+    assert 'end="20260701T050000Z"' in body
     assert "VEVENT" in body and "calendar-data" in body
 
 
-def _report_with(ical_body: str) -> str:
-    return (
-        '<?xml version="1.0"?>'
-        '<d:multistatus xmlns:d="DAV:" xmlns:cal="urn:ietf:params:xml:ns:caldav">'
-        "<d:response><d:href>/x.ics</d:href><d:propstat><d:prop>"
-        f"<cal:calendar-data>{ical_body}</cal:calendar-data>"
-        "</d:prop></d:propstat></d:response>"
-        "</d:multistatus>"
-    )
+# --- Normalización de DTSTART/DTEND a UTC -------------------------------------
 
 
 def test_parse_events_utc_timed_event():
@@ -80,29 +98,61 @@ def test_parse_events_utc_timed_event():
         "END:VEVENT\n"
         "END:VCALENDAR"
     )
-    events = parse_events(_report_with(ical), calendar="personal")
+    events = parse_events(_report_with(ical), tz=BOGOTA, calendar="personal")
 
     assert len(events) == 1
     ev = events[0]
     assert ev.summary == "Reunión con cliente"
+    # Sufijo Z → UTC, independientemente de la zona del usuario.
     assert ev.start == datetime(2026, 6, 30, 9, 0, tzinfo=timezone.utc)
     assert ev.end == datetime(2026, 6, 30, 10, 0, tzinfo=timezone.utc)
     assert ev.all_day is False
     assert ev.calendar == "personal"
 
 
-def test_parse_events_all_day_event():
+def test_parse_events_tzid_is_localized_then_converted_to_utc():
     ical = (
         "BEGIN:VEVENT\n"
-        "SUMMARY:Festivo\n"
-        "DTSTART;VALUE=DATE:20260630\n"
-        "DTEND;VALUE=DATE:20260701\n"
+        "SUMMARY:Cena\n"
+        "DTSTART;TZID=America/Bogota:20260630T230000\n"
+        "DTEND;TZID=America/Bogota:20260701T000000\n"
         "END:VEVENT"
     )
-    (ev,) = parse_events(_report_with(ical))
+    ev = _one_event(ical, tz=timezone.utc)  # la zona del usuario no se usa: hay TZID
+
+    # 23:00 en Bogotá (UTC-5) = 04:00 UTC del día siguiente.
+    assert ev.start == datetime(2026, 7, 1, 4, 0, tzinfo=timezone.utc)
+    assert ev.end == datetime(2026, 7, 1, 5, 0, tzinfo=timezone.utc)
+
+
+def test_parse_events_floating_assumes_user_zone():
+    ical = "BEGIN:VEVENT\nSUMMARY:Flotante\nDTSTART:20260630T230000\nEND:VEVENT"
+
+    ev = _one_event(ical, tz=BOGOTA)  # sin Z ni TZID → zona del usuario
+
+    assert ev.start == datetime(2026, 7, 1, 4, 0, tzinfo=timezone.utc)
+
+
+def test_parse_events_unknown_tzid_falls_back_to_user_zone():
+    ical = (
+        "BEGIN:VEVENT\nSUMMARY:Zona rara\n"
+        "DTSTART;TZID=Mars/Olympus:20260630T230000\nEND:VEVENT"
+    )
+    ev = _one_event(ical, tz=BOGOTA)  # TZID inválido degrada a la zona del usuario
+
+    assert ev.start == datetime(2026, 7, 1, 4, 0, tzinfo=timezone.utc)
+
+
+def test_parse_events_all_day_is_local_full_day():
+    ical = (
+        "BEGIN:VEVENT\nSUMMARY:Festivo\n"
+        "DTSTART;VALUE=DATE:20260630\nDTEND;VALUE=DATE:20260701\nEND:VEVENT"
+    )
+    ev = _one_event(ical, tz=BOGOTA)
 
     assert ev.all_day is True
-    assert ev.start == datetime(2026, 6, 30, 0, 0, tzinfo=timezone.utc)
+    # Medianoche local de Bogotá = 05:00 UTC.
+    assert ev.start == datetime(2026, 6, 30, 5, 0, tzinfo=timezone.utc)
 
 
 def test_parse_events_unfolds_lines_and_unescapes():
@@ -115,7 +165,7 @@ def test_parse_events_unfolds_lines_and_unescapes():
         "DTSTART:20260630T120000Z\n"
         "END:VEVENT"
     )
-    (ev,) = parse_events(_report_with(ical))
+    ev = _one_event(ical)
 
     assert ev.summary == "Almuerzo, planning y retro"
     assert ev.end is None  # sin DTEND
@@ -128,7 +178,7 @@ def test_parse_events_handles_multiple_vevents():
         "BEGIN:VEVENT\nSUMMARY:Dos\nDTSTART:20260630T090000Z\nEND:VEVENT\n"
         "END:VCALENDAR"
     )
-    events = parse_events(_report_with(ical))
+    events = parse_events(_report_with(ical), tz=BOGOTA)
 
     assert [e.summary for e in events] == ["Uno", "Dos"]
 
@@ -138,4 +188,49 @@ def test_parse_events_empty_when_no_calendar_data():
         '<d:multistatus xmlns:d="DAV:" '
         'xmlns:cal="urn:ietf:params:xml:ns:caldav"></d:multistatus>'
     )
-    assert parse_events(xml) == []
+    assert parse_events(xml, tz=BOGOTA) == []
+
+
+# --- Pertenencia al "día" del usuario (aware vs aware, cruce por offset -5) ----
+
+
+def test_event_at_2300_local_belongs_to_today():
+    # EL BUG VIEJO: con fronteras UTC, 23:00 local (04:00Z del día siguiente) se caía
+    # fuera de "hoy". Con el día enmarcado en Bogotá, pertenece.
+    today = DateRange.for_day(date(2026, 6, 30), tz=BOGOTA)
+    ev = _one_event(
+        "BEGIN:VEVENT\nSUMMARY:Tarde\n"
+        "DTSTART;TZID=America/Bogota:20260630T230000\nEND:VEVENT",
+        tz=BOGOTA,
+    )
+
+    assert ev.start == datetime(2026, 7, 1, 4, 0, tzinfo=timezone.utc)
+    assert today.contains(ev.start) is True
+
+
+def test_event_tomorrow_morning_not_in_today():
+    today = DateRange.for_day(date(2026, 6, 30), tz=BOGOTA)
+    ev = _one_event(
+        "BEGIN:VEVENT\nSUMMARY:Mañana\n"
+        "DTSTART;TZID=America/Bogota:20260701T100000\nEND:VEVENT",
+        tz=BOGOTA,
+    )
+
+    assert today.contains(ev.start) is False
+
+
+def test_local_midnight_is_inclusive_start_of_today():
+    today = DateRange.for_day(date(2026, 6, 30), tz=BOGOTA)
+    at_midnight = _one_event(
+        "BEGIN:VEVENT\nSUMMARY:Medianoche\n"
+        "DTSTART;TZID=America/Bogota:20260630T000000\nEND:VEVENT",
+        tz=BOGOTA,
+    )
+    before = _one_event(
+        "BEGIN:VEVENT\nSUMMARY:Ayer tarde\n"
+        "DTSTART;TZID=America/Bogota:20260629T235900\nEND:VEVENT",
+        tz=BOGOTA,
+    )
+
+    assert today.contains(at_midnight.start) is True  # [start inclusivo
+    assert today.contains(before.start) is False

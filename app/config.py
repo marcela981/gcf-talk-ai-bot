@@ -74,6 +74,11 @@ class Settings:
     app_secret: str
     aa_version: str
     dav_url_suffix: str
+    # --- Localización (Bloque 2.1): zona horaria del usuario para las skills ----
+    # Define el "día" del usuario (p. ej. '¿qué tengo hoy?') y la presentación de
+    # horas en hora local. Nombre IANA resuelto con `zoneinfo` (stdlib): en el
+    # contenedor Linux usa la tzdb del sistema; un nombre inválido degrada a UTC.
+    bot_default_tz: str
 
     @property
     def appapi_ready(self) -> bool:
@@ -136,6 +141,7 @@ def _load() -> Settings:
         app_secret=os.environ.get("APP_SECRET", ""),
         aa_version=os.environ.get("AA_VERSION", "2.2.0"),
         dav_url_suffix=os.environ.get("DAV_URL_SUFFIX", "remote.php/dav"),
+        bot_default_tz=os.environ.get("BOT_DEFAULT_TZ", "America/Bogota"),
     )
 
 

@@ -2,18 +2,22 @@
 
 El `CalendarPort` se reemplaza por un `FakeCalendar` — sin red. Se verifica que la
 skill: se REHÚSA cuando no hay identidad impersonable (uid None), delega en el port
-con el uid resuelto y el rango del día, usa hoy por defecto, valida la fecha y
-convierte fallos del port en `SkillResult.failure` (dato, no excepción).
+con el uid resuelto y el rango del día EN LA ZONA del usuario, usa "hoy" en esa zona
+por defecto, presenta las horas en local, valida la fecha y convierte fallos del
+port en `SkillResult.failure` (dato, no excepción).
 """
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+from zoneinfo import ZoneInfo
 
 import pytest
 
 from app.adapters.calendar_skill import ResumenAgendaSkill
 from app.domain.actor_context import ActorContext
 from app.domain.calendar import CalendarEvent, DateRange
+
+BOGOTA = ZoneInfo("America/Bogota")  # UTC-5, sin DST
 
 
 class FakeCalendar:
@@ -49,7 +53,8 @@ async def test_refuses_without_local_identity():
 
 
 @pytest.mark.asyncio
-async def test_delegates_with_resolved_uid_and_day_range():
+async def test_delegates_with_user_zone_range_and_presents_local_time():
+    # Evento a las 09:00 UTC = 04:00 en Bogotá (UTC-5).
     events = [
         CalendarEvent(
             summary="Daily",
@@ -59,38 +64,42 @@ async def test_delegates_with_resolved_uid_and_day_range():
         )
     ]
     calendar = FakeCalendar(events)
-    skill = ResumenAgendaSkill(calendar=calendar)
+    skill = ResumenAgendaSkill(calendar=calendar, tz=BOGOTA)
 
     result = await skill.execute({"fecha": "2026-06-30"}, _USER)
 
     assert result.ok
     assert result.data["fecha"] == "2026-06-30"
+    assert result.data["zona_horaria"] == "America/Bogota"
     assert result.data["total"] == 1
-    assert result.data["eventos"][0]["titulo"] == "Daily"
-    assert result.data["eventos"][0]["inicio"] == "2026-06-30T09:00:00+00:00"
-    # Se delegó con el uid resuelto y el rango del día pedido.
+    # La hora se devuelve en LOCAL del usuario, no en UTC.
+    assert result.data["eventos"][0]["inicio"] == "2026-06-30T04:00:00-05:00"
+    assert result.data["eventos"][0]["fin"] == "2026-06-30T04:15:00-05:00"
+    # El rango delegado está enmarcado en la zona del usuario.
     uid, rng = calendar.calls[0]
     assert uid == "mmazo"
-    assert rng == DateRange.for_day(date(2026, 6, 30))
+    assert rng == DateRange.for_day(date(2026, 6, 30), tz=BOGOTA)
+    assert rng.tz == BOGOTA
 
 
 @pytest.mark.asyncio
-async def test_defaults_to_today_when_fecha_absent():
+async def test_defaults_to_today_in_user_zone():
     calendar = FakeCalendar()
-    skill = ResumenAgendaSkill(calendar=calendar)
+    skill = ResumenAgendaSkill(calendar=calendar, tz=BOGOTA)
 
     result = await skill.execute({}, _USER)
 
+    today_bogota = datetime.now(BOGOTA).date()
     assert result.ok
-    assert result.data["fecha"] == date.today().isoformat()
+    assert result.data["fecha"] == today_bogota.isoformat()
     _, rng = calendar.calls[0]
-    assert rng == DateRange.for_day(date.today())
+    assert rng == DateRange.for_day(today_bogota, tz=BOGOTA)
 
 
 @pytest.mark.asyncio
 async def test_invalid_date_is_a_failure():
     calendar = FakeCalendar()
-    skill = ResumenAgendaSkill(calendar=calendar)
+    skill = ResumenAgendaSkill(calendar=calendar, tz=BOGOTA)
 
     result = await skill.execute({"fecha": "30/06/2026"}, _USER)
 
@@ -101,7 +110,7 @@ async def test_invalid_date_is_a_failure():
 
 @pytest.mark.asyncio
 async def test_port_error_becomes_failure_result_not_exception():
-    skill = ResumenAgendaSkill(calendar=BoomCalendar())
+    skill = ResumenAgendaSkill(calendar=BoomCalendar(), tz=BOGOTA)
 
     result = await skill.execute({"fecha": "2026-06-30"}, _USER)
 

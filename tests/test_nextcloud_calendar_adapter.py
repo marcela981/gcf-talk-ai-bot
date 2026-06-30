@@ -156,6 +156,39 @@ async def test_propfind_non_207_raises():
         await adapter.list_events("mmazo", DateRange.for_day(date(2026, 6, 30)))
 
 
+@pytest.mark.asyncio
+async def test_events_outside_the_day_are_filtered_out():
+    # El servidor puede sobre-devolver en los bordes; el filtro aware-vs-aware del
+    # adapter (DateRange.contains) descarta lo que no cae en el día consultado.
+    def _report_on(date_compact: str, summary: str) -> str:
+        ical = (
+            "BEGIN:VEVENT\n"
+            f"SUMMARY:{summary}\n"
+            f"DTSTART:{date_compact}T100000Z\n"
+            "END:VEVENT"
+        )
+        return (
+            '<?xml version="1.0"?>'
+            '<d:multistatus xmlns:d="DAV:" xmlns:cal="urn:ietf:params:xml:ns:caldav">'
+            "<d:response><d:href>/x.ics</d:href><d:propstat><d:prop>"
+            f"<cal:calendar-data>{ical}</cal:calendar-data>"
+            "</d:prop></d:propstat></d:response></d:multistatus>"
+        )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "PROPFIND":
+            return httpx.Response(207, text=_PROPFIND_XML)
+        if request.url.path.endswith("/personal/"):
+            return httpx.Response(207, text=_report_on("20260630", "Hoy"))
+        return httpx.Response(207, text=_report_on("20260701", "Mañana"))
+
+    adapter = _adapter(handler)
+
+    events = await adapter.list_events("mmazo", DateRange.for_day(date(2026, 6, 30)))
+
+    assert [e.summary for e in events] == ["Hoy"]
+
+
 def test_missing_credentials_rejected_at_construction():
     with pytest.raises(CalendarError):
         NextcloudCalendarAdapter(

@@ -162,6 +162,7 @@ if settings.agent_enabled:
     if settings.appapi_ready:
         from app.adapters.calendar_skill import ResumenAgendaSkill
         from app.adapters.nextcloud_calendar_adapter import NextcloudCalendarAdapter
+        from app.domain.calendar import to_zoneinfo
 
         _calendar = NextcloudCalendarAdapter(
             endpoint=settings.nextcloud_url,
@@ -171,7 +172,10 @@ if settings.agent_enabled:
             aa_version=settings.aa_version,
             dav_url_suffix=settings.dav_url_suffix,
         )
-        _registry.register(ResumenAgendaSkill(calendar=_calendar))
+        # Zona del usuario para encuadrar el "día" y presentar horas en local
+        # (Bloque 2.1). Nombre inválido degrada a UTC (to_zoneinfo).
+        _bot_tz = to_zoneinfo(settings.bot_default_tz)
+        _registry.register(ResumenAgendaSkill(calendar=_calendar, tz=_bot_tz))
 
     if len(_registry) > 0:
         _skills = _registry

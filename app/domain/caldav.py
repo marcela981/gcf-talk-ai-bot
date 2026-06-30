@@ -10,9 +10,9 @@ la reconciliación tiktoken↔capas de ARCHITECTURE §3).
 from __future__ import annotations
 
 import xml.etree.ElementTree as ET
-from datetime import datetime, timezone
+from datetime import datetime, timezone, tzinfo
 
-from app.domain.calendar import CalendarEvent, DateRange
+from app.domain.calendar import CalendarEvent, DateRange, to_zoneinfo
 
 _DAV_NS = "{DAV:}"
 _CALDAV_NS = "{urn:ietf:params:xml:ns:caldav}"
@@ -74,14 +74,19 @@ def parse_calendar_hrefs(multistatus_xml: str) -> list[str]:
 
 
 def parse_events(
-    multistatus_xml: str, *, calendar: str | None = None
+    multistatus_xml: str, *, tz: tzinfo, calendar: str | None = None
 ) -> list[CalendarEvent]:
-    """Extrae y normaliza los VEVENT de un multistatus ``calendar-query``."""
+    """Extrae y normaliza a **UTC-aware** los VEVENT de un multistatus ``calendar-query``.
+
+    ``tz`` es la zona del usuario: se usa para interpretar las horas flotantes (sin
+    ``Z`` ni ``TZID``) y para enmarcar los eventos ``VALUE=DATE`` (todo-el-día) como
+    el día local completo. Las horas con ``Z`` o ``TZID`` traen su propia zona.
+    """
     root = ET.fromstring(multistatus_xml)
     events: list[CalendarEvent] = []
     for data_el in root.iter(f"{_CALDAV_NS}calendar-data"):
         if data_el.text:
-            events.extend(_parse_vevents(data_el.text, calendar=calendar))
+            events.extend(_parse_vevents(data_el.text, calendar=calendar, tz=tz))
     return events
 
 
@@ -113,30 +118,51 @@ def _unescape(value: str) -> str:
     return "".join(out).strip()
 
 
-def _parse_ical_datetime(name: str, value: str) -> tuple[datetime, bool] | None:
-    """Parsea un valor DTSTART/DTEND → ``(datetime, all_day)`` o ``None`` si no encaja.
+def _params(name: str) -> dict[str, str]:
+    """Parámetros de una propiedad iCal (``DTSTART;TZID=...;VALUE=...``) → dict en MAYÚS."""
+    out: dict[str, str] = {}
+    for part in name.split(";")[1:]:
+        if "=" in part:
+            key, val = part.split("=", 1)
+            out[key.strip().upper()] = val.strip()
+    return out
 
-    Soporta ``...Z`` (UTC, aware), ``VALUE=DATE`` / ``YYYYMMDD`` (todo-el-día,
-    medianoche UTC) y datetimes locales/flotantes o con ``TZID`` (naive: BLOQUE 2 no
-    convierte zona — no hay base de zonas horarias cableada).
+
+def _parse_ical_datetime(
+    name: str, value: str, tz: tzinfo
+) -> tuple[datetime, bool] | None:
+    """Parsea DTSTART/DTEND a ``(datetime UTC-aware, all_day)`` o ``None`` si no encaja.
+
+    Reglas de zona (Bloque 2.1), todo normalizado a UTC:
+    * ``...Z``            → UTC.
+    * ``;TZID=<zona>``    → se localiza con esa zona y se convierte a UTC (si la zona
+      es desconocida, se cae a ``tz`` del usuario).
+    * ``VALUE=DATE``/``YYYYMMDD`` (todo-el-día) → medianoche **local** del día (``tz``)
+      convertida a UTC.
+    * flotante (sin ``Z`` ni ``TZID``) → se asume la zona del usuario (``tz``).
     """
     value = value.strip()
-    is_date = "VALUE=DATE" in name.upper() and "DATE-TIME" not in name.upper()
+    params = _params(name)
+    is_date = params.get("VALUE", "").upper() == "DATE"
     try:
         if is_date or (len(value) == 8 and value.isdigit()):
-            day = datetime.strptime(value, _ICAL_DATE).replace(tzinfo=timezone.utc)
-            return (day, True)
+            local = datetime.strptime(value, _ICAL_DATE).replace(tzinfo=tz)
+            return (local.astimezone(timezone.utc), True)
         if value.endswith("Z"):
             return (
                 datetime.strptime(value, _ICAL_DT_UTC).replace(tzinfo=timezone.utc),
                 False,
             )
-        return (datetime.strptime(value, _ICAL_DT_LOCAL), False)
+        naive = datetime.strptime(value, _ICAL_DT_LOCAL)
+        zone = to_zoneinfo(params["TZID"], default=tz) if "TZID" in params else tz
+        return (naive.replace(tzinfo=zone).astimezone(timezone.utc), False)
     except ValueError:
         return None
 
 
-def _parse_vevents(ical_text: str, *, calendar: str | None) -> list[CalendarEvent]:
+def _parse_vevents(
+    ical_text: str, *, calendar: str | None, tz: tzinfo
+) -> list[CalendarEvent]:
     """Recorre el VCALENDAR y emite un CalendarEvent por cada VEVENT con DTSTART válido."""
     events: list[CalendarEvent] = []
     in_event = False
@@ -173,8 +199,8 @@ def _parse_vevents(ical_text: str, *, calendar: str | None) -> list[CalendarEven
         if prop == "SUMMARY":
             summary = _unescape(value)
         elif prop == "DTSTART":
-            dtstart = _parse_ical_datetime(name, value)
+            dtstart = _parse_ical_datetime(name, value, tz)
         elif prop == "DTEND":
-            dtend = _parse_ical_datetime(name, value)
+            dtend = _parse_ical_datetime(name, value, tz)
 
     return events

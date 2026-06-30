@@ -13,7 +13,7 @@ claro. Si hay identidad, delega en `CalendarPort` y devuelve los eventos del dí
 from __future__ import annotations
 
 import logging
-from datetime import date
+from datetime import date, datetime, timezone, tzinfo
 from typing import Any
 
 from app.domain.actor_context import ActorContext
@@ -54,10 +54,15 @@ _NO_IDENTITY_MSG = (
 
 
 class ResumenAgendaSkill:
-    """Implementa el contrato `Skill` delegando la lectura en un `CalendarPort`."""
+    """Implementa el contrato `Skill` delegando la lectura en un `CalendarPort`.
 
-    def __init__(self, *, calendar: CalendarPort) -> None:
+    ``tz`` es la zona horaria del usuario (de ``settings.bot_default_tz``): define
+    qué es "hoy" y en qué hora local se presentan los eventos al LLM (Bloque 2.1).
+    """
+
+    def __init__(self, *, calendar: CalendarPort, tz: tzinfo = timezone.utc) -> None:
         self._calendar = calendar
+        self._tz = tz
 
     @property
     def name(self) -> str:
@@ -76,7 +81,7 @@ class ResumenAgendaSkill:
         if actor.impersonated_uid is None:
             return SkillResult.failure(_NO_IDENTITY_MSG)
 
-        day = _parse_day(args.get("fecha"))
+        day = _parse_day(args.get("fecha"), self._tz)
         if day is None:
             return SkillResult.failure(
                 "La fecha debe ir en formato ISO 'YYYY-MM-DD'."
@@ -84,7 +89,7 @@ class ResumenAgendaSkill:
 
         try:
             events = await self._calendar.list_events(
-                actor.impersonated_uid, DateRange.for_day(day)
+                actor.impersonated_uid, DateRange.for_day(day, tz=self._tz)
             )
         except Exception as exc:  # noqa: BLE001 — devolver el fallo como dato (ADR-018)
             logger.exception("Consulta de calendario falló para el día %s.", day)
@@ -93,27 +98,38 @@ class ResumenAgendaSkill:
         return SkillResult.success(
             {
                 "fecha": day.isoformat(),
+                "zona_horaria": _tz_label(self._tz),
                 "total": len(events),
-                "eventos": [_event_to_dict(e) for e in events],
+                "eventos": [_event_to_dict(e, self._tz) for e in events],
             }
         )
 
 
-def _parse_day(raw: Any) -> date | None:
-    """``None``/vacío → hoy; ISO ``YYYY-MM-DD`` → ese día; inválido → ``None``."""
+def _parse_day(raw: Any, tz: tzinfo) -> date | None:
+    """``None``/vacío → hoy **en la zona del usuario**; ISO → ese día; inválido → ``None``."""
     if raw is None or not str(raw).strip():
-        return date.today()
+        return datetime.now(tz).date()
     try:
         return date.fromisoformat(str(raw).strip())
     except ValueError:
         return None
 
 
-def _event_to_dict(event: CalendarEvent) -> dict[str, Any]:
+def _event_to_dict(event: CalendarEvent, tz: tzinfo) -> dict[str, Any]:
+    """Serializa el evento con sus horas en **hora local** del usuario.
+
+    Las horas internas son UTC-aware; se convierten a ``tz`` para que el LLM no
+    re-interprete husos (la zona se anuncia aparte en ``zona_horaria``).
+    """
     return {
         "titulo": event.summary,
-        "inicio": event.start.isoformat(),
-        "fin": event.end.isoformat() if event.end is not None else None,
+        "inicio": event.start.astimezone(tz).isoformat(),
+        "fin": event.end.astimezone(tz).isoformat() if event.end is not None else None,
         "todo_el_dia": event.all_day,
         "calendario": event.calendar,
     }
+
+
+def _tz_label(tz: tzinfo) -> str:
+    """Nombre legible de la zona (``key`` de ZoneInfo, p. ej. 'America/Bogota')."""
+    return getattr(tz, "key", None) or str(tz)

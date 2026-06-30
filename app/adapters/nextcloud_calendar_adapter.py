@@ -119,10 +119,20 @@ class NextcloudCalendarAdapter:
                         report.status_code,
                     )
                     continue
-                events.extend(parse_events(report.text, calendar=_calendar_name(href)))
+                events.extend(
+                    parse_events(
+                        report.text,
+                        tz=date_range.tz,
+                        calendar=_calendar_name(href),
+                    )
+                )
 
-        events.sort(key=lambda e: (e.start, e.summary))
-        return events
+        # Filtro de pertenencia al día aware-vs-aware: el time-range del servidor es
+        # una criba gruesa; aquí se confirma que el inicio cae en la ventana local
+        # del usuario (defensa frente a bordes/expansiones del servidor).
+        in_day = [e for e in events if date_range.contains(e.start)]
+        in_day.sort(key=lambda e: (e.start, e.summary))
+        return in_day
 
     def _headers(self, uid: str) -> dict[str, str]:
         """Cabeceras AppAPI firmadas que impersonan a ``uid``. El secreto no se loguea."""
