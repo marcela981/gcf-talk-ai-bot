@@ -11,9 +11,14 @@ from __future__ import annotations
 
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
-from datetime import datetime, timezone, tzinfo
+from datetime import datetime, timedelta, timezone, tzinfo
 
-from app.domain.calendar import CalendarEvent, DateRange, to_zoneinfo
+from app.domain.calendar import (
+    CalendarEvent,
+    DateRange,
+    NewCalendarEvent,
+    to_zoneinfo,
+)
 
 
 @dataclass(frozen=True)
@@ -71,6 +76,119 @@ def build_calendar_query(date_range: DateRange) -> str:
         "</c:comp-filter></c:comp-filter></c:filter>"
         "</c:calendar-query>"
     )
+
+
+_DEFAULT_PRODID = "-//GCF//Talk AI Bot//ES"
+_MAX_LINE_OCTETS = 75  # RFC 5545 §3.1: content lines se pliegan a <=75 octetos.
+
+
+def build_vevent_ics(
+    event: NewCalendarEvent,
+    *,
+    uid: str,
+    dtstamp: datetime,
+    prodid: str = _DEFAULT_PRODID,
+) -> str:
+    """Construye un VCALENDAR/VEVENT iCalendar válido para el PUT de creación (Bloque 2.2).
+
+    ``uid`` (nombre del recurso ``.ics``) y ``dtstamp`` (marca de creación) se inyectan
+    desde el adapter para que esta función sea **pura y determinista** (testeable offline).
+
+    ZONA HORARIA — DTSTART/DTEND se emiten con la hora **local del usuario** anclada a
+    ``TZID`` **más** un bloque ``VTIMEZONE`` (RFC 5545 §3.6.5), de modo que el instante
+    quede definido sin depender de que el servidor conozca la zona. El offset del
+    ``VTIMEZONE`` se toma del que la ``tzinfo`` (``ZoneInfo``) reporta **en el instante
+    del evento**: es un ``VTIMEZONE`` de **offset fijo por evento**, correcto para el
+    instante creado y estructuralmente conforme; NO modela las transiciones DST del huso
+    (simplificación deliberada — un evento puntual no cruza un cambio de hora). Si la
+    ``tzinfo`` no expone un nombre IANA (``key``) o es UTC, se cae a la forma UTC ``...Z``
+    (sin ``VTIMEZONE``), igual de válida.
+    """
+    start, end = event.start, event.end
+    tzid = getattr(start.tzinfo, "key", None)
+
+    lines = ["BEGIN:VCALENDAR", "VERSION:2.0", f"PRODID:{prodid}", "CALSCALE:GREGORIAN"]
+    if tzid and tzid.upper() != "UTC":
+        lines.extend(_vtimezone_lines(tzid, start))
+        dtstart = f"DTSTART;TZID={tzid}:{start.strftime(_ICAL_DT_LOCAL)}"
+        dtend = f"DTEND;TZID={tzid}:{end.strftime(_ICAL_DT_LOCAL)}"
+    else:
+        dtstart = f"DTSTART:{_ical_utc(start)}"
+        dtend = f"DTEND:{_ical_utc(end)}"
+
+    lines.extend(
+        [
+            "BEGIN:VEVENT",
+            f"UID:{uid}",
+            f"DTSTAMP:{_ical_utc(dtstamp)}",
+            dtstart,
+            dtend,
+            f"SUMMARY:{_escape(event.summary)}",
+        ]
+    )
+    if event.description:
+        lines.append(f"DESCRIPTION:{_escape(event.description)}")
+    if event.location:
+        lines.append(f"LOCATION:{_escape(event.location)}")
+    lines.extend(["END:VEVENT", "END:VCALENDAR"])
+
+    return "".join(f"{_fold(line)}\r\n" for line in lines)
+
+
+def _vtimezone_lines(tzid: str, reference: datetime) -> list[str]:
+    """VTIMEZONE de offset fijo con el offset vigente en ``reference`` (ver `build_vevent_ics`)."""
+    offset = _format_utc_offset(reference.utcoffset() or timedelta(0))
+    tzname = reference.tzname() or offset
+    return [
+        "BEGIN:VTIMEZONE",
+        f"TZID:{tzid}",
+        "BEGIN:STANDARD",
+        "DTSTART:19700101T000000",
+        f"TZOFFSETFROM:{offset}",
+        f"TZOFFSETTO:{offset}",
+        f"TZNAME:{tzname}",
+        "END:STANDARD",
+        "END:VTIMEZONE",
+    ]
+
+
+def _format_utc_offset(delta: timedelta) -> str:
+    """Formatea un offset UTC como ``±HHMM`` (p. ej. ``-0500`` para Bogotá)."""
+    total = int(delta.total_seconds())
+    sign = "+" if total >= 0 else "-"
+    total = abs(total)
+    return f"{sign}{total // 3600:02d}{(total % 3600) // 60:02d}"
+
+
+def _escape(text: str) -> str:
+    """Escapa texto iCalendar (RFC 5545 §3.3.11): ``\\``, ``,``, ``;`` y saltos de línea."""
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    return (
+        normalized.replace("\\", "\\\\")
+        .replace("\n", "\\n")
+        .replace(",", "\\,")
+        .replace(";", "\\;")
+    )
+
+
+def _fold(line: str) -> str:
+    """Pliega una línea a <=75 octetos (RFC 5545 §3.1) sin partir un carácter multibyte.
+
+    Las líneas de continuación empiezan con un espacio (que cuenta para el límite), así
+    que tras la primera el corte es a 74 octetos. Líneas cortas pasan intactas.
+    """
+    raw = line.encode("utf-8")
+    if len(raw) <= _MAX_LINE_OCTETS:
+        return line
+    parts: list[bytes] = []
+    start, limit = 0, _MAX_LINE_OCTETS
+    while start < len(raw):
+        end = min(start + limit, len(raw))
+        while end < len(raw) and (raw[end] & 0xC0) == 0x80:  # no partir UTF-8 multibyte
+            end -= 1
+        parts.append(raw[start:end])
+        start, limit = end, _MAX_LINE_OCTETS - 1  # continuación: 1 octeto es el espacio
+    return "\r\n ".join(part.decode("utf-8") for part in parts)
 
 
 def parse_calendar_hrefs(multistatus_xml: str) -> list[str]:

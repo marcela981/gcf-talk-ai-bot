@@ -167,9 +167,12 @@ if settings.agent_enabled:
         )
 
     if settings.appapi_ready:
+        from app.adapters.agendar_evento_skill import AgendarEventoSkill
         from app.adapters.calendar_skill import ResumenAgendaSkill
         from app.adapters.nextcloud_calendar_adapter import NextcloudCalendarAdapter
 
+        # Un solo adapter CalDAV firmado sirve lectura y escritura (el port distingue
+        # list_events de create_event). Ambas skills comparten instancia y gate.
         _calendar = NextcloudCalendarAdapter(
             endpoint=settings.nextcloud_url,
             app_id=settings.app_id,
@@ -179,6 +182,8 @@ if settings.agent_enabled:
             dav_url_suffix=settings.dav_url_suffix,
         )
         _registry.register(ResumenAgendaSkill(calendar=_calendar, tz=_bot_tz))
+        # Bloque 2.2: skill de ESCRITURA (crear eventos), mismo gate appapi_ready.
+        _registry.register(AgendarEventoSkill(calendar=_calendar, tz=_bot_tz))
 
     if len(_registry) > 0:
         _skills = _registry

@@ -100,3 +100,56 @@ class CalendarEvent:
     all_day: bool = False
     calendar: str | None = None
     recurring: bool = False
+
+
+@dataclass(frozen=True)
+class NewCalendarEvent:
+    """Un evento **a crear** (draft), en la zona del usuario (Bloque 2.2). Value object puro.
+
+    Es la entrada de :meth:`~app.services.calendar_port.CalendarPort.create_event`:
+    describe el *contenido* del evento, no dónde se guarda salvo el ``calendar``
+    opcional (segmento destino; ``None`` ⇒ el adapter usa el calendario ``personal``).
+
+    * ``summary``     — título (obligatorio).
+    * ``start``/``end`` — instantes **tz-aware** en la zona del usuario (``end`` exclusivo,
+      posterior a ``start``). El adapter los serializa a iCal con ``TZID`` + ``VTIMEZONE``.
+    * ``description``/``location`` — texto opcional.
+    * ``calendar``    — nombre del calendario destino (último segmento del href, p. ej.
+      ``"work"``); ``None`` ⇒ ``personal`` (default del adapter).
+
+    NO valida aquí (mismo estilo que :class:`CalendarEvent`): la skill valida los args
+    y construye horas aware antes de instanciar; el adapter rechaza uid vacío.
+    """
+
+    summary: str
+    start: datetime
+    end: datetime
+    description: str | None = None
+    location: str | None = None
+    calendar: str | None = None
+
+
+@dataclass(frozen=True)
+class CreatedEvent:
+    """Resultado de crear un evento (Bloque 2.2). Value object puro, **error como dato**.
+
+    El adapter NO lanza excepción cruda ante los rechazos HTTP esperables de escritura
+    (403/409/412): los devuelve como ``ok=False`` + ``error`` legible, para que la skill
+    los traduzca a ``SkillResult.failure`` y el LLM pueda explicárselo al usuario
+    (SPIKE_IMPERSONATION §6: esta es la primera validación de escritura impersonada).
+
+    * ``ok``       — ``True`` sii el servidor confirmó la creación (HTTP 201/204).
+    * ``status``   — código HTTP crudo devuelto por el PUT.
+    * ``uid``      — UID del VEVENT generado (también el nombre del recurso ``.ics``).
+    * ``calendar`` — segmento del calendario destino usado.
+    * ``href``     — ruta del recurso creado (``Location`` del 201 o la ruta del PUT);
+      ``None`` si no se creó.
+    * ``error``    — mensaje claro cuando ``ok=False``; ``None`` en éxito.
+    """
+
+    ok: bool
+    status: int
+    uid: str
+    calendar: str
+    href: str | None = None
+    error: str | None = None
