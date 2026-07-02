@@ -110,7 +110,7 @@ docker exec --user www-data <nextcloud_container> \
       "secret":"<APP_SECRET de .env>",
       "host":"gcf-talk-ai-bot",
       "port":8080,
-      "scopes":["TALK","TALK_BOT"],
+      "scopes":["TALK","TALK_BOT","FILES"],
       "system_app":false
     }' \
     --force-scopes \
@@ -152,6 +152,46 @@ curl http://gcf-talk-ai-bot:8080/heartbeat
 ```
 
 Respuesta esperada: `{"status":"ok"}`.
+
+## Skills (modo agente)
+
+Con `AGENT_ENABLED=true`, el LLM enruta por **tool-calling** (ADR-017/ADR-018): en vez
+de responder solo con texto, puede invocar *skills*. Cada skill se cablea según su
+**propia dependencia**, no un interruptor global:
+
+- **Base de conocimiento** (`consultar_base_conocimiento`) — sii RAG configurado
+  (`PGVECTOR_DSN` + `OPENAI_API_KEY`).
+- **Skills de Nextcloud** (calendario, Deck, archivos) — sii `appapi_ready`
+  (`NEXTCLOUD_URL` + `APP_ID` + `APP_SECRET`). Cada una construye su **propio cliente
+  HTTP firmado** (`AUTHORIZATION-APP-API`) y actúa **impersonando** al usuario que
+  menciona al bot (ADR-016): resuelve su `uid` de Talk y opera bajo SU identidad, así
+  que solo ve/toca lo que ese usuario ya puede.
+
+Si el registro queda vacío (sin RAG ni AppAPI) o `AGENT_ENABLED=false`, el bot degrada
+a la ruta de texto puro de la Fase 1/2.
+
+Las **5 skills de Nextcloud** activas bajo `appapi_ready`:
+
+| Skill | Tipo | Bloque | Qué hace |
+|-------|------|--------|----------|
+| `consultar_calendario` | lectura | 2.1 | Lista eventos del calendario (un día o rango), incluyendo recurrencias. |
+| `agendar_evento` | escritura | 2.2 | Crea un evento (CalDAV) con título, fecha y hora. |
+| `consultar_deck` | lectura | 2.3 | Lista tableros de Deck y las tarjetas de un tablero/columna. |
+| `crear_tarjeta_deck` | escritura | 2.3 | Crea una tarjeta en una columna de un tablero. |
+| `consultar_archivos` | lectura | 2.4 | Lista/busca archivos y lee el contenido de texto de uno. |
+
+> **Identidad requerida:** las skills de Nextcloud exigen que el actor de Talk tenga
+> `uid` local (`users/<uid>`); invitados/federados se **rehúsan** con un mensaje claro.
+>
+> **Estado de la escritura:** `agendar_evento` y `crear_tarjeta_deck` están implementadas
+> y unit-testeadas, pendientes de la **validación runtime** (smoke) — ver
+> `docs/adr/ADR-016`. **Fuera de alcance por ahora:** escritura de Files (Bloque 2.4b) y
+> asignación de usuarios en Deck (Bloque 2.3b, requiere resolver nombre→uid).
+>
+> **Scopes:** el conjunto de skills de Nextcloud usa los scopes `TALK`, `TALK_BOT` y
+> `FILES` (declarados en `appinfo/info.xml`); `FILES` es el que necesita `consultar_archivos`
+> (la lectura CalDAV/Deck ya funcionó con `TALK`/`TALK_BOT` en el spike de impersonation).
+> Regístralos al dar de alta la ExApp (paso 5).
 
 ## Tests
 
@@ -231,3 +271,10 @@ await bot.send_message(reply, message)
 | `NEXTCLOUD_URL`      | sí        | `http://nextcloud-nextcloud-1`                       | URL interna de Nextcloud dentro de la red Docker compartida. |
 | `AA_VERSION`         | sí        | `32.0.0`                                             | Versión de AppAPI declarada a `nc_py_api`.                   |
 | `APP_PERSISTENT_STORAGE` | sí    | `/data`                                              | Punto de montaje del volumen persistente.                    |
+| `AGENT_ENABLED`      | no        | `false`                                              | Activa el modo agente (tool-calling / skills). Con `false`, ruta de texto Fase 1/2. |
+| `BOT_DEFAULT_TZ`     | no        | `America/Bogota`                                     | Zona IANA del usuario para las skills de calendario/Deck (define "hoy" y presenta horas en local). |
+| `FILES_READ_MAX_BYTES` | no      | `262144`                                             | Límite (bytes) para leer texto con `consultar_archivos`; excesos/binarios se rechazan. |
+
+> Esta tabla lista el núcleo de despliegue y las variables de las skills de Nextcloud.
+> Las variables de RAG (`PGVECTOR_DSN`, `EMBEDDING_MODEL`, `RAG_*`, …) y de memoria
+> conversacional (`CONVERSATION_*`) están documentadas en `.env.example`.

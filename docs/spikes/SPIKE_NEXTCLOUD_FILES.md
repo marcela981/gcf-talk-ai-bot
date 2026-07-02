@@ -229,6 +229,26 @@ Después de tener el JSON:
 
 ## 7. Veredicto sobre ADR-006
 
+> **Seguimiento (Bloque 2.4 — skill puntual, NO corpus).** El NO-GO de ADR-006 aplica
+> **solo** a usar Files como **corpus del RAG** (ingesta masiva + sync incremental
+> frágil: H7 sin sync token, polling+etag, deuda). **NO** aplica a una **lectura
+> puntual bajo demanda** (listar/buscar/leer un archivo cuando el usuario lo pide),
+> que no necesita ingesta ni detección de cambios. Esa lectura puntual es el Bloque
+> **2.4** (`FilesPort` + `NextcloudFilesAdapter` + skill `consultar_archivos`).
+>
+> A diferencia de este spike (que usó `nc_py_api`: `set_user` + `files.listdir` /
+> `download2stream`), el adapter de 2.4 habla **WebDAV crudo con su propio cliente
+> firmado** (`AUTHORIZATION-APP-API`, deuda **D-IMP-1**): `PROPFIND` Depth 1 para
+> listar y `GET` para leer, **sin** `nc._session.adapter` ni imports de `app/_spike`.
+> Está implementado y **unit-testeado sin red** (MockTransport). El **primer PROPFIND
+> real** valida la **lectura WebDAV impersonada** (comparte mecanismo con la lectura
+> CalDAV ya probada en `SPIKE_IMPERSONATION.md`).
+>
+> La **ESCRITURA** de Files (subir/mover/borrar) queda **fuera** (Bloque **2.4b**) y
+> comparte el gate de **validación de escritura impersonada** pendiente (Track A,
+> deuda **D-IMP-2** en ADR-016). Detalle en ADR-016 §«Estado de la escritura
+> impersonada».
+
 ### Veredicto preliminar
 
 **GO condicionado.**

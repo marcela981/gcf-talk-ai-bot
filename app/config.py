@@ -74,6 +74,10 @@ class Settings:
     app_secret: str
     aa_version: str
     dav_url_suffix: str
+    # Límite de lectura de texto de la skill de Files (Bloque 2.4): archivos que superen
+    # este tamaño (o binarios) se rechazan con un error claro, para no volcar un archivo
+    # enorme al contexto del LLM. Default 256 KB.
+    files_read_max_bytes: int
     # --- Localización (Bloque 2.1): zona horaria del usuario para las skills ----
     # Define el "día" del usuario (p. ej. '¿qué tengo hoy?') y la presentación de
     # horas en hora local. Nombre IANA resuelto con `zoneinfo` (stdlib): en el
@@ -141,6 +145,9 @@ def _load() -> Settings:
         app_secret=os.environ.get("APP_SECRET", ""),
         aa_version=os.environ.get("AA_VERSION", "2.2.0"),
         dav_url_suffix=os.environ.get("DAV_URL_SUFFIX", "remote.php/dav"),
+        files_read_max_bytes=int(
+            os.environ.get("FILES_READ_MAX_BYTES", str(256 * 1024))
+        ),
         bot_default_tz=os.environ.get("BOT_DEFAULT_TZ", "America/Bogota"),
     )
 

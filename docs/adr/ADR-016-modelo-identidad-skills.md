@@ -58,6 +58,12 @@ endurecimiento, no como trabajo previo obligatorio.
 > Lo que el spike **no** validó: la **escritura** impersonada (skills con efectos).
 > Antes de habilitar cualquier skill con efectos hay que confirmar que el `uid`
 > impersonado puede crear/modificar recursos, no sólo leerlos.
+>
+> **Actualización (Bloques 2.2/2.3):** el *camino* de escritura ya está
+> **implementado** detrás del Port para Calendar (`create_event`, CalDAV PUT) y Deck
+> (`create_card`, REST POST), con cliente firmado propio (D-IMP-1) y tests sin red.
+> Falta sólo la **validación runtime** (primer `create` real). Ver
+> «Estado de la escritura impersonada (Bloques 2.2/2.3)» más abajo.
 
 ### Mapeo Talk `actor_id` → `uid`
 
@@ -90,11 +96,14 @@ ADR-014). El mapeo a identidad impersonable es:
   fuera de este ADR.)
 - **Guests / federados sin skills.** Aceptado: las skills son acciones
   corporativas, no para invitados anónimos.
-- **Lectura impersonada validada; escritura no.** El spike confirma lectura
-  impersonada (Calendar 207, Deck 200) en `manual_install`, así que las skills de
-  **solo-lectura** quedan habilitadas por identidad. **Toda skill con efectos
-  permanece deshabilitada** hasta validar la **escritura** impersonada — ese es
-  ahora el gate, no HaRP.
+- **Lectura impersonada validada; escritura implementada, pendiente de smoke.** El
+  spike confirma lectura impersonada (Calendar 207, Deck 200) en `manual_install`,
+  así que las skills de **solo-lectura** quedan habilitadas por identidad. La
+  **escritura** ya tiene camino **implementado y unit-testeado** (Calendar 2.2,
+  Deck 2.3) con el **mismo mecanismo** de cliente firmado; el gate que queda es la
+  **validación runtime** (primer `create` real), no HaRP. Como ambas superficies
+  comparten mecanismo, **un solo smoke valida ambas**. Ver «Estado de la escritura
+  impersonada (Bloques 2.2/2.3)».
 - **Stateless preservado (ADR-003).** `set_user` se aplica **por ejecución** y no
   persiste entre webhooks (consistente con la prueba H6 del spike de Files). El
   único estado entre requests sigue siendo el buffer de ADR-014.
@@ -121,6 +130,52 @@ Los _scopes_ actuales son `TALK` y `TALK_BOT` (README §5). El spike confirmó
 - `NOTIFICATIONS`, `ACTIVITIES`, calendario/tareas para **escritura** — **TBD**;
   la escritura impersonada no se validó y puede exigir _scopes_ extra.
 
+## Estado de la escritura impersonada (Bloques 2.2/2.3)
+
+El spike fue **read-only**; la escritura quedó como gate. Estado actual — el camino
+está **implementado y unit-testeado**, a falta de la corrida real:
+
+- **Calendar — crear evento (Bloque 2.2).** `CalendarPort.create_event` →
+  `NextcloudCalendarAdapter.create_event`: **PUT** de un VEVENT (`.ics`) a
+  `/remote.php/dav/calendars/<uid>/<calendario>/<uid-evento>.ics` con `If-None-Match: *`
+  (crear-sin-pisar) y `DTSTART`/`DTEND` en `TZID` + `VTIMEZONE`. Status crudo como
+  dato (201/204 ok; 403/409/412 → resultado de error, sin excepción cruda).
+- **Deck — crear tarjeta (Bloque 2.3).** `DeckPort.create_card` →
+  `DeckRestAdapter.create_card`: resuelve board→id y stack→id (por id o título) vía GET
+  y hace **POST** `/index.php/apps/deck/api/v1.0/boards/{boardId}/stacks/{stackId}/cards`
+  (`OCS-APIRequest`, `Content-Type: application/json`; body `title`/`type`/`order` +
+  `description`/`duedate` opcionales). Status crudo como dato (200/201 ok; 400/403/404 →
+  resultado de error).
+
+Ambos caminos:
+
+- respetan **D-IMP-1**: **cliente HTTP propio firmado** detrás del Port
+  (`AUTHORIZATION-APP-API = base64(uid:app_secret)`), **sin** `nc._session.adapter` ni
+  imports de `app/_spike`; el `app_secret` **nunca** se loguea;
+- reportan el fallo como **dato** (no excepción cruda para los rechazos HTTP esperables);
+- están cubiertos por **tests sin red** (`httpx.MockTransport`): ruta, cabeceras de
+  impersonation, cuerpo y mapeo de status.
+
+**Comparten el mecanismo de escritura impersonada** (mismo header firmado, misma forma
+de reportar status). Por tanto **un solo smoke real valida ambas superficies**: si el
+primer `create_event`/`create_card` es honrado por Nextcloud bajo la identidad
+impersonada, la escritura queda confirmada para Calendar y Deck. Hasta ese smoke, la
+escritura está **implementada y unit-testeada, pero NO validada en runtime** (sigue
+siendo el gate, no HaRP).
+
+> **Fuera de alcance (Bloque 2.3b):** la **asignación de usuarios** a una tarjeta de
+> Deck requiere resolver **nombre→uid** y NO está implementada; `create_card` no la
+> expone aún.
+>
+> **Files (Bloque 2.4):** la **lectura** impersonada (WebDAV `PROPFIND`/`GET` vía
+> cliente firmado propio, D-IMP-1) ya está implementada y unit-testeada
+> (`FilesPort` + `NextcloudFilesAdapter` + skill `consultar_archivos`, SOLO lectura).
+> El NO-GO de ADR-006 aplicaba **solo** a Files como **corpus RAG** (ingesta/sync
+> frágil), **no** a esta lectura puntual; su **primer PROPFIND real** valida la
+> lectura WebDAV impersonada (comparte mecanismo con la lectura CalDAV ya probada).
+> La **escritura** de Files (subir/mover/borrar) queda para el Bloque **2.4b**,
+> compartiendo este mismo gate de validación de escritura impersonada (D-IMP-2).
+
 ## Deuda registrada
 
 - **D-IMP-1 · Las skills NO deben usar `nc._session.adapter`.** El spike accedió a
@@ -131,3 +186,17 @@ Los _scopes_ actuales son `TALK` y `TALK_BOT` (README §5). El spike confirmó
   skill productiva debe hablar con Nextcloud a través de un **cliente HTTP propio
   firmado detrás del Port** (o de APIs OCS/typed cuando existan), nunca tocando
   `nc._session.adapter`. Gate de diseño para ADR-018/ADR-019.
+  **Estado:** honrada por Calendar (2.2) y Deck (2.3), que construyen su propio
+  cliente firmado detrás del Port (ver «Estado de la escritura impersonada»).
+- **D-IMP-2 · Validación runtime de escritura impersonada pendiente.** El camino de
+  escritura (Calendar `create_event`, Deck `create_card`) está implementado y
+  unit-testeado sin red, pero **no** se ha ejercido contra un Nextcloud real. Falta un
+  **smoke** que cree un evento y una tarjeta bajo la identidad impersonada y confirme
+  que el servidor lo honra (y que no faltan _scopes_ de escritura). Ambas superficies
+  comparten mecanismo ⇒ un solo smoke las cubre. Es el gate para dar por validada la
+  escritura.
+- **D-IMP-3 · Builder de cabeceras firmadas duplicado.** `NextcloudCalendarAdapter` y
+  `DeckRestAdapter` replican el mismo `_headers(uid)` (token `AUTHORIZATION-APP-API`).
+  Duplicación **deliberada** (cada adapter encapsula su propio cliente; no se refactorizó
+  para no tocar Calendar al añadir Deck). Candidato a extraer a un helper compartido
+  (p. ej. `adapters/appapi_auth.py`) cuando aparezca una tercera superficie.

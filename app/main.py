@@ -185,6 +185,39 @@ if settings.agent_enabled:
         # Bloque 2.2: skill de ESCRITURA (crear eventos), mismo gate appapi_ready.
         _registry.register(AgendarEventoSkill(calendar=_calendar, tz=_bot_tz))
 
+        # Bloque 2.3: Deck (lectura + crear tarjeta), mismo gate y mismo cliente firmado
+        # propio (D-IMP-1). Un solo adapter REST sirve ambas skills. La ASIGNACIÓN de
+        # usuarios a la tarjeta queda para 2.3b (requiere resolver nombre→uid).
+        from app.adapters.consultar_deck_skill import ConsultarDeckSkill
+        from app.adapters.crear_tarjeta_deck_skill import CrearTarjetaDeckSkill
+        from app.adapters.nextcloud_deck_adapter import DeckRestAdapter
+
+        _deck = DeckRestAdapter(
+            endpoint=settings.nextcloud_url,
+            app_id=settings.app_id,
+            app_version=settings.app_version,
+            app_secret=settings.app_secret,
+            aa_version=settings.aa_version,
+        )
+        _registry.register(ConsultarDeckSkill(deck=_deck))
+        _registry.register(CrearTarjetaDeckSkill(deck=_deck, tz=_bot_tz))
+
+        # Bloque 2.4: Files (SOLO lectura: listar/buscar/leer), mismo gate y cliente
+        # firmado propio (D-IMP-1). La ESCRITURA de Files queda para 2.4b (Track A).
+        from app.adapters.consultar_archivos_skill import ConsultarArchivosSkill
+        from app.adapters.nextcloud_files_adapter import NextcloudFilesAdapter
+
+        _files = NextcloudFilesAdapter(
+            endpoint=settings.nextcloud_url,
+            app_id=settings.app_id,
+            app_version=settings.app_version,
+            app_secret=settings.app_secret,
+            aa_version=settings.aa_version,
+            dav_url_suffix=settings.dav_url_suffix,
+            max_text_bytes=settings.files_read_max_bytes,
+        )
+        _registry.register(ConsultarArchivosSkill(files=_files))
+
     if len(_registry) > 0:
         _skills = _registry
         logger.info(
