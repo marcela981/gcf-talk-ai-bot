@@ -29,16 +29,22 @@ logger = logging.getLogger(__name__)
 
 _NAME = "consultar_dashboard"
 _DESCRIPTION = (
-    "Consulta los datos del DASHBOARD corporativo del usuario que te escribe: sus TAREAS "
-    "asignadas y sus HORAS registradas (reportes/histórico propios). Úsala para p. ej.: "
-    "'¿qué tareas tengo asignadas?', '¿cuántas horas registré esta semana?', 'mis horas "
-    "de julio', 'mi carga de trabajo'. Dos recursos: 'tareas' y 'horas' (para 'horas' "
-    "puedes acotar con 'desde'/'hasta' en ISO 'YYYY-MM-DD', que calculas desde la 'Fecha "
-    "actual' del contexto).\n"
-    "IMPORTANTE — esta tool consulta la BASE DE DATOS del dashboard, NO el estado en vivo "
-    "de Nextcloud: para el estado ACTUAL de un tablero de Deck usa 'consultar_deck'; para "
-    "el calendario usa 'consultar_calendario'. Devuelve solo datos del propio usuario. "
-    "SOLO lectura."
+    "Consulta el DASHBOARD corporativo (time tracking) del usuario que te escribe: sus "
+    "HORAS registradas y sus TAREAS/actividades (reportes e histórico propios). Es LA "
+    "fuente para las HORAS, el TIEMPO TRABAJADO, las TAREAS del tracker y el DESEMPEÑO del "
+    "dashboard (ADR-023). Úsala SIEMPRE que pregunte por su tiempo, sus registros o su "
+    "carga, p. ej.: '¿cuántas horas registré esta semana?', 'cuánto tiempo llevo "
+    "trabajado', 'cuánto registré ayer', 'mis horas de julio', 'mi time tracking', "
+    "'mis actividades', '¿qué actividades registré?', 'mis tareas del tracker', "
+    "'mis tareas del dashboard', '¿qué tareas tengo asignadas?', 'mi carga de trabajo'.\n"
+    "Dos recursos: 'horas' (registros de tiempo; acota con 'desde'/'hasta' en ISO "
+    "'YYYY-MM-DD', que calculas desde la 'Fecha actual' del contexto) y 'tareas' "
+    "(tareas/actividades asignadas del dashboard).\n"
+    "IMPORTANTE — consulta la BASE DE DATOS del dashboard corporativo, NO el estado en "
+    "vivo de Nextcloud. Para horas/tiempo/actividades/tareas del dashboard usa ESTA tool. "
+    "En cambio, para el estado ACTUAL de un tablero de Deck (sus columnas y tarjetas en "
+    "vivo) usa 'consultar_deck', y para el calendario 'consultar_calendario'. Devuelve "
+    "solo datos del propio usuario. SOLO lectura."
 )
 _PARAMETERS_SCHEMA: dict[str, Any] = {
     "type": "object",
