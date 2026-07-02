@@ -62,8 +62,27 @@ services:
       # DEPRECADO (ADR-006-ter): el corpus ya no vive en un bucket; sin efecto.
       - SUPABASE_BUCKET=${SUPABASE_BUCKET:-}
 
+      # --- Bloque 3: dashboard_db (MySQL read-only vía sidecar db-tunnel) ---
+      # HOST/PORT apuntan al sidecar dentro de vps2DockerNet; el túnel emerge en
+      # localhost de VPS3 (usuario gcf_bot_ro@127.0.0.1). Sin NAME/USER/PASSWORD la
+      # skill de dashboard NO se registra (dashboard_ready=false → degrada). El
+      # password va en .env (gitignored) y NUNCA se loguea.
+      - DASHBOARD_DB_HOST=${DASHBOARD_DB_HOST:-db-tunnel}
+      - DASHBOARD_DB_PORT=${DASHBOARD_DB_PORT:-3306}
+      - DASHBOARD_DB_NAME=${DASHBOARD_DB_NAME:-dashboard_db}
+      - DASHBOARD_DB_USER=${DASHBOARD_DB_USER:-gcf_bot_ro}
+      # PASSWORD vacío por defecto ⇒ dashboard_ready=false hasta ponerlo en .env.
+      # Usa la password YA ROTADA de gcf_bot_ro (NO la comprometida). NUNCA se loguea.
+      - DASHBOARD_DB_PASSWORD=${DASHBOARD_DB_PASSWORD:-}
+
     depends_on:
-      - pgvector
+      pgvector:
+        condition: service_started
+      # El bot arranca tras el sidecar, pero NO espera a que el túnel esté "healthy"
+      # (service_started, no service_healthy): si VPS3/túnel está caído, el bot igual
+      # sube y la skill degrada a error-como-dato (no tumba el bot). Deuda D10.
+      db-tunnel:
+        condition: service_started
 
     # Persistent storage volume nc_py_api expects (APP_PERSISTENT_STORAGE).
     volumes:
@@ -105,6 +124,54 @@ services:
       timeout: 5s
       start_period: 10s
       retries: 3
+
+  # --- Bloque 3: túnel SSH a dashboard_db (MySQL en VPS3) — Patrón B de ADR-022 --
+  # El bot corre DENTRO de vps2DockerNet y NO alcanza el gateway del host, así que el
+  # túnel NO puede vivir en el host: este sidecar autossh corre EN la red y el bot le
+  # habla por nombre de servicio (`db-tunnel:3306`). El forward emerge en 127.0.0.1 de
+  # VPS3 porque el usuario MySQL es gcf_bot_ro@127.0.0.1.
+  #
+  # jnovack/autossh construye: autossh -M $SSH_MONITOR_PORT $SSH_MODE
+  #   $SSH_BIND_IP:$SSH_TUNNEL_PORT:$SSH_TARGET_HOST:$SSH_TARGET_PORT -N ...
+  #   $SSH_REMOTE_USER@$SSH_REMOTE_HOST -p $SSH_REMOTE_PORT
+  # ⇒ con los valores de abajo: -M 0 -L 0.0.0.0:3306:127.0.0.1:33069 gcf_tunnel@153.92.214.91.
+  #
+  # REQUIERE ./secrets/db_tunnel_key (llave privada) y ./secrets/known_hosts PRECARGADO
+  # de VPS3 (ssh-keyscan; StrictHostKeyChecking=yes, nunca =no). Ver secrets/README.md.
+  # Si NO usas el dashboard, comenta este servicio Y el `db-tunnel` de depends_on arriba.
+  # Deuda operativa D10 (ADR-022): fragilidad de reconexión, rotación de la llave del
+  # túnel, VPS3 como dependencia de disponibilidad → migrar a red privada (Patrón A).
+  db-tunnel:
+    image: jnovack/autossh:2.0.1
+    container_name: gcf-db-tunnel
+    restart: unless-stopped
+    networks:
+      - vps2DockerNet
+    # 3306 SOLO dentro de vps2DockerNet — SIN `ports:` al host.
+    expose:
+      - "3306"
+    environment:
+      # Endpoint remoto (VPS3). Valores concretos por defecto; overridables por .env.
+      - SSH_REMOTE_HOST=${VPS3_SSH_HOST:-153.92.214.91}
+      - SSH_REMOTE_PORT=${VPS3_SSH_PORT:-22}
+      - SSH_REMOTE_USER=${TUNNEL_SSH_USER:-gcf_tunnel}
+      # -L (local forward): escucha en 0.0.0.0:3306 del sidecar y sale a 127.0.0.1:33069
+      # de VPS3 (localhost de VPS3, exigido por gcf_bot_ro@127.0.0.1).
+      - SSH_MODE=-L
+      - SSH_BIND_IP=0.0.0.0
+      - SSH_TUNNEL_PORT=3306
+      - SSH_TARGET_HOST=127.0.0.1
+      - SSH_TARGET_PORT=${DASHBOARD_DB_REMOTE_PORT:-33069}
+      # Llave privada + known_hosts precargado (montados ro). StrictHostKeyChecking=yes.
+      - SSH_KEY_FILE=/id_rsa
+      - SSH_KNOWN_HOSTS_FILE=/known_hosts
+      - SSH_MONITOR_PORT=0
+      - SSH_SERVER_ALIVE_INTERVAL=30
+      - SSH_SERVER_ALIVE_COUNT_MAX=3
+      - SSH_OPTIONS=-o ExitOnForwardFailure=yes -o StrictHostKeyChecking=yes
+    volumes:
+      - ./secrets/db_tunnel_key:/id_rsa:ro
+      - ./secrets/known_hosts:/known_hosts:ro
 
 networks:
   # External: created and owned by the nginxproxymanager compose project.

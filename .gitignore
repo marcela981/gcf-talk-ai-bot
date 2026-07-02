@@ -39,7 +39,12 @@ Thumbs.db
 .claude/
 
 # Claude settings
-.claude/settings.local.json 
+.claude/settings.local.json
+
+# Secrets (Bloque 3: túnel a dashboard_db) — llaves SSH, known_hosts, notas de infra.
+# Nada de ./secrets se comitea salvo el README que documenta qué poner ahí.
+secrets/*
+!secrets/README.md
 
 migrations/
 docs/spikes/SPIKE_IMPERSONATION.md

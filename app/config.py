@@ -83,6 +83,17 @@ class Settings:
     # horas en hora local. Nombre IANA resuelto con `zoneinfo` (stdlib): en el
     # contenedor Linux usa la tzdb del sistema; un nombre inválido degrada a UTC.
     bot_default_tz: str
+    # --- Dashboard corporativo (Bloque 3, ADR-020/021/022): BD MySQL read-only --
+    # El bot lee `dashboard_db` (MySQL en VPS3) SOLO para datos estructurados propios
+    # del usuario (tareas/horas). La conexión emerge en localhost de VPS3 por el túnel
+    # SSH sidecar `db-tunnel` (Patrón B de ADR-022): por eso HOST=db-tunnel y PORT=3306
+    # desde el bot. Defaults vacíos: sin config, la skill no se registra (dashboard_ready).
+    # La password NUNCA se loguea.
+    dashboard_db_host: str
+    dashboard_db_port: int
+    dashboard_db_name: str
+    dashboard_db_user: str
+    dashboard_db_password: str
 
     @property
     def appapi_ready(self) -> bool:
@@ -93,6 +104,22 @@ class Settings:
         que AppAPI inyecta. Sin ellas, esa skill no se registra (degradación).
         """
         return bool(self.nextcloud_url and self.app_id and self.app_secret)
+
+    @property
+    def dashboard_ready(self) -> bool:
+        """True cuando hay config mínima para consultar `dashboard_db` (Bloque 3).
+
+        Análogo a `appapi_ready`/`rag_enabled`: sin host+name+user+password la skill de
+        dashboard NO se registra (degradación). La **ruta de red** (túnel sidecar
+        `db-tunnel`) es un prerequisito de INFRA (ADR-022); esta propiedad solo mira la
+        config del bot, no comprueba conectividad.
+        """
+        return bool(
+            self.dashboard_db_host
+            and self.dashboard_db_name
+            and self.dashboard_db_user
+            and self.dashboard_db_password
+        )
 
     @property
     def rag_enabled(self) -> bool:
@@ -149,6 +176,11 @@ def _load() -> Settings:
             os.environ.get("FILES_READ_MAX_BYTES", str(256 * 1024))
         ),
         bot_default_tz=os.environ.get("BOT_DEFAULT_TZ", "America/Bogota"),
+        dashboard_db_host=os.environ.get("DASHBOARD_DB_HOST", ""),
+        dashboard_db_port=int(os.environ.get("DASHBOARD_DB_PORT", "3306")),
+        dashboard_db_name=os.environ.get("DASHBOARD_DB_NAME", ""),
+        dashboard_db_user=os.environ.get("DASHBOARD_DB_USER", ""),
+        dashboard_db_password=os.environ.get("DASHBOARD_DB_PASSWORD", ""),
     )
 
 

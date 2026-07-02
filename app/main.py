@@ -218,6 +218,23 @@ if settings.agent_enabled:
         )
         _registry.register(ConsultarArchivosSkill(files=_files))
 
+    # Bloque 3: dashboard corporativo (dashboard_db MySQL, SOLO lectura). Gate PROPIO
+    # `dashboard_ready` (independiente de appapi_ready): la fuente es una BD, no Nextcloud.
+    # La conexión llega por el túnel sidecar `db-tunnel` (Patrón B, ADR-022); el driver
+    # MySQL se importa perezosamente aquí. Deuda operativa D10 (fragilidad del túnel).
+    if settings.dashboard_ready:
+        from app.adapters.consultar_dashboard_skill import ConsultarDashboardSkill
+        from app.adapters.dashboard_mysql_adapter import DashboardMySQLAdapter
+
+        _dashboard = DashboardMySQLAdapter(
+            host=settings.dashboard_db_host,
+            port=settings.dashboard_db_port,
+            name=settings.dashboard_db_name,
+            user=settings.dashboard_db_user,
+            password=settings.dashboard_db_password,
+        )
+        _registry.register(ConsultarDashboardSkill(dashboard=_dashboard))
+
     if len(_registry) > 0:
         _skills = _registry
         logger.info(
