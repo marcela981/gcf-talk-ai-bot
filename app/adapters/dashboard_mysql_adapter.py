@@ -13,7 +13,7 @@ REGLA DE ORO — IDENTIDAD (ADR-021): cada método recibe el ``uid`` (no opciona
 ``uid`` sin fila ⇒ :class:`NoDashboardProfileError`. El ``password`` NUNCA se loguea; el DSN
 no se construye con el secreto en claro en logs.
 
-El driver MySQL (``aiomysql``) se importa **de forma perezosa** (solo si se usa el fetch
+El driver MySQL (``asyncmy``) se importa **de forma perezosa** (solo si se usa el fetch
 real), igual que el RAG. ``fetch`` es inyectable para tests sin BD.
 
 NOTA (D9): los nombres de tabla/columna (``users.nc_user_id``/``users.id``, ``tasks``,
@@ -75,7 +75,7 @@ class DashboardMySQLAdapter:
         self._user = user
         self._password = password  # NUNCA se loguea
         self._ssl = ssl
-        self._fetch_impl = fetch  # None ⇒ driver real (aiomysql) perezoso
+        self._fetch_impl = fetch  # None ⇒ driver real (asyncmy) perezoso
 
     async def list_tasks(self, uid: str) -> list[DashboardTask]:
         user_id = await self._resolve_user_id(uid)
@@ -122,22 +122,22 @@ class DashboardMySQLAdapter:
     async def _default_fetch(
         self, sql: str, params: dict[str, Any]
     ) -> list[dict[str, Any]]:
-        """Ejecuta el SELECT con ``aiomysql`` (import perezoso), cursor de dicts, read-only."""
-        aiomysql = _import_aiomysql()
-        conn = await aiomysql.connect(
+        """Ejecuta el SELECT con ``asyncmy`` (import perezoso), cursor de dicts, read-only."""
+        asyncmy, dict_cursor = _import_asyncmy()
+        conn = await asyncmy.connect(
             host=self._host,
             port=self._port,
-            db=self._name,
+            database=self._name,
             user=self._user,
             password=self._password,
             ssl=self._ssl,
         )
         try:
-            async with conn.cursor(aiomysql.DictCursor) as cur:
+            async with conn.cursor(cursor=dict_cursor) as cur:
                 await cur.execute(sql, params)
                 return list(await cur.fetchall())
         finally:
-            conn.close()  # aiomysql: close() es síncrono
+            await conn.ensure_closed()  # asyncmy: el cierre es una corrutina
 
 
 def _time_logs_query(
@@ -156,13 +156,17 @@ def _time_logs_query(
     return sql, params
 
 
-def _import_aiomysql():
-    """Import perezoso del driver MySQL async; ausencia ⇒ error claro del adapter."""
+def _import_asyncmy():
+    """Import perezoso del driver MySQL async (``asyncmy`` + su ``DictCursor``).
+
+    Ausencia ⇒ error claro del adapter (solo se necesita si ``dashboard_ready``).
+    """
     try:
-        import aiomysql
+        import asyncmy
+        from asyncmy.cursors import DictCursor
     except ImportError as exc:  # pragma: no cover - depende del entorno
         raise DashboardError(
-            "Falta el driver 'aiomysql' para conectar a dashboard_db; instala "
+            "Falta el driver 'asyncmy' para conectar a dashboard_db; instala "
             "requirements.txt (solo se necesita si dashboard_ready)."
         ) from exc
-    return aiomysql
+    return asyncmy, DictCursor

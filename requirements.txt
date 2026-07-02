@@ -27,7 +27,7 @@ tiktoken>=0.7,<1
 pypdf>=4,<6
 
 # --- Bloque 3: dashboard_db (MySQL read-only, ADR-020/022) -----------------
-# Driver MySQL async del DashboardPort. Import PEREZOSO en el adapter: solo se
-# importa si `dashboard_ready` (config presente), así que no lastra los despliegues
-# que no usan el dashboard. `asyncmy` es la alternativa de performance (drop-in-ish).
-aiomysql>=0.2,<0.3
+# Driver MySQL async que usa DashboardMySQLAdapter. Import PEREZOSO en el adapter
+# (solo si `dashboard_ready`), así que no lastra los despliegues que no usan el
+# dashboard. Cython + wheels precompilados; el build del contenedor lo instala.
+asyncmy>=0.2.9,<0.3
