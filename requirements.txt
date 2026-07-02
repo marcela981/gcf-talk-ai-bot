@@ -31,3 +31,9 @@ pypdf>=4,<6
 # (solo si `dashboard_ready`), así que no lastra los despliegues que no usan el
 # dashboard. Cython + wheels precompilados; el build del contenedor lo instala.
 asyncmy>=0.2.9,<0.3
+# asyncmy NO declara `cryptography` (Requires vacío), pero la necesita en RUNTIME
+# para el full-auth de caching_sha2_password/sha256_password de MySQL 8 (cifrado RSA
+# de la contraseña sobre la conexión NO-TLS que sale por el túnel SSH). Sin ella, la
+# conexión falla con "'cryptography' package is required". Es el ÚNICO extra de auth
+# (no hace falta nada más para el handshake en el camino localhost del túnel).
+cryptography>=42,<44
