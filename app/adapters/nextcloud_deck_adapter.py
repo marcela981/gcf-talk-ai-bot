@@ -37,6 +37,7 @@ from app.domain.deck import (
     Board,
     BoardStatus,
     CreatedCard,
+    filter_stacks_by_assignee,
     find_board,
     find_stack,
     parse_boards,
@@ -93,14 +94,20 @@ class DeckRestAdapter:
         logger.info("Tableros de Deck para %s: %d.", uid, len(boards))
         return boards
 
-    async def get_board_status(self, uid: str, board: str | int) -> BoardStatus:
+    async def get_board_status(
+        self, uid: str, board: str | int, assigned_to_uid: str | None = None
+    ) -> BoardStatus:
         if not uid:
             raise DeckError("uid vacío: no hay identidad que impersonar.")
         match = find_board(await self.list_boards(uid), board)
         if match is None:
             raise DeckError(f"No encontré un tablero que coincida con {board!r}.")
         stacks_payload = await self._get_json(uid, f"/boards/{match.id}/stacks")
-        return BoardStatus(board=match, stacks=tuple(parse_stacks(stacks_payload)))
+        stacks = tuple(parse_stacks(stacks_payload))
+        if assigned_to_uid:
+            # "Solo mías": conserva solo las tarjetas asignadas a ese uid (2.3).
+            stacks = filter_stacks_by_assignee(stacks, assigned_to_uid)
+        return BoardStatus(board=match, stacks=stacks)
 
     async def create_card(
         self,

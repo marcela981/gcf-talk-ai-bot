@@ -176,7 +176,7 @@ Las **5 skills de Nextcloud** activas bajo `appapi_ready`:
 |-------|------|--------|----------|
 | `consultar_calendario` | lectura | 2.1 | Lista eventos del calendario (un día o rango), incluyendo recurrencias. |
 | `agendar_evento` | escritura | 2.2 | Crea un evento (CalDAV) con título, fecha y hora. |
-| `consultar_deck` | lectura | 2.3 | Lista tableros de Deck y las tarjetas de un tablero/columna. |
+| `consultar_deck` | lectura | 2.3 | Lista tableros de Deck y las tarjetas de un tablero/columna (por defecto solo las **asignadas a quien pregunta**; `solo_mias=false` para ver todas). |
 | `crear_tarjeta_deck` | escritura | 2.3 | Crea una tarjeta en una columna de un tablero. |
 | `consultar_archivos` | lectura | 2.4 | Lista/busca archivos y lee el contenido de texto de uno. |
 

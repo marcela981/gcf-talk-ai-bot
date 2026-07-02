@@ -28,12 +28,17 @@ _DESC_MAX = 200
 _DESCRIPTION = (
     "Consulta los tableros y tarjetas (tareas) de Deck del usuario que te escribe. Úsala "
     "cuando pregunte por sus tareas, tableros o el estado de un proyecto, p. ej.: "
-    "'¿qué tareas tengo?', '¿qué tableros tengo?', 'estado del board TECH PROY', "
-    "'¿qué hay en la columna To Do de TECH PROY?', '¿qué tengo pendiente en Ventas?'. "
+    "'¿qué tareas tengo?', 'mis tareas en TECH PROY', '¿qué tableros tengo?', "
+    "'estado del board TECH PROY', '¿qué hay en la columna To Do de TECH PROY?'. "
     "Pasa 'tablero' (id o título) para ver sus columnas y tarjetas; añade 'columna' para "
     "filtrar a una sola columna. Si NO sabes qué tablero, OMITE 'tablero' y la tool "
-    "devuelve la lista de tableros para elegir. Devuelve título, fecha límite y una "
-    "descripción breve de cada tarjeta. SOLO lectura: no crea ni modifica tarjetas."
+    "devuelve la lista de tableros para elegir.\n"
+    "MÍAS vs TODAS: por defecto ('solo_mias'=true) devuelve SOLO las tarjetas asignadas a "
+    "quien pregunta — para 'mis tareas', '¿qué tengo pendiente?', '¿qué me toca en X?'. "
+    "Cuando pida ver TODO el tablero (todas las tarjetas, de cualquiera) — 'qué hay en el "
+    "board X', 'todas las tarjetas de X', 'estado completo de X' — pasa 'solo_mias'=false.\n"
+    "Devuelve título, fecha límite, asignados y una descripción breve de cada tarjeta. "
+    "SOLO lectura: no crea ni modifica tarjetas."
 )
 _PARAMETERS_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -50,6 +55,14 @@ _PARAMETERS_SCHEMA: dict[str, Any] = {
             "description": (
                 "Filtra a una columna por título (p. ej. 'To Do'), case-insensitive. "
                 "Requiere 'tablero'. Omítela para ver todas las columnas."
+            ),
+        },
+        "solo_mias": {
+            "type": "boolean",
+            "description": (
+                "Si true (POR DEFECTO), devuelve solo las tarjetas asignadas a quien "
+                "pregunta ('mis tareas'). Ponla en false para ver TODAS las tarjetas del "
+                "tablero (de cualquiera). Solo aplica al consultar un 'tablero'."
             ),
         },
     },
@@ -97,18 +110,28 @@ class ConsultarDeckSkill:
                         "total": len(boards),
                     }
                 )
+            only_mine = _wants_only_mine(args.get("solo_mias"))
+            assigned = actor.impersonated_uid if only_mine else None
             status = await self._deck.get_board_status(
-                actor.impersonated_uid, str(board_ref).strip()
+                actor.impersonated_uid, str(board_ref).strip(), assigned_to_uid=assigned
             )
         except Exception as exc:  # noqa: BLE001 — devolver el fallo como dato (ADR-018)
             logger.exception("Consulta de Deck falló para %s.", actor.impersonated_uid)
             return SkillResult.failure(f"Error consultando Deck: {exc}")
 
-        return SkillResult.success(_board_status_to_dict(status, args.get("columna")))
+        return SkillResult.success(
+            _board_status_to_dict(status, args.get("columna"), only_mine)
+        )
 
 
-def _board_status_to_dict(status: BoardStatus, columna: Any) -> dict[str, Any]:
-    """Serializa el tablero; si ``columna`` viene, filtra a esa columna (case-insensitive)."""
+def _board_status_to_dict(
+    status: BoardStatus, columna: Any, only_mine: bool
+) -> dict[str, Any]:
+    """Serializa el tablero; si ``columna`` viene, filtra a esa columna (case-insensitive).
+
+    ``only_mine`` solo se refleja en la salida (``solo_mias``); el filtrado real por
+    asignado ya lo hizo el port (``get_board_status``).
+    """
     wanted = str(columna).strip().casefold() if columna and str(columna).strip() else None
     columnas = []
     total = 0
@@ -120,6 +143,7 @@ def _board_status_to_dict(status: BoardStatus, columna: Any) -> dict[str, Any]:
         columnas.append({"columna": stack.title, "tarjetas": tarjetas})
     return {
         "tablero": {"id": status.board.id, "titulo": status.board.title},
+        "solo_mias": only_mine,
         "columnas": columnas,
         "total_tarjetas": total,
     }
@@ -133,5 +157,15 @@ def _card_to_dict(card: Card) -> dict[str, Any]:
     return {
         "titulo": card.title,
         "vence": card.due_date,
+        "asignados": list(card.assignees) or None,
         "descripcion": description,
     }
+
+
+def _wants_only_mine(raw: Any) -> bool:
+    """``solo_mias``: ausente/``None`` ⇒ True (default "solo mías"); tolera bool o string."""
+    if raw is None:
+        return True
+    if isinstance(raw, bool):
+        return raw
+    return str(raw).strip().lower() not in ("false", "0", "no")

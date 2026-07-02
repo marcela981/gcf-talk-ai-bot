@@ -45,6 +45,47 @@ _STACKS_89 = [
     {"id": 6, "title": "Doing", "cards": []},
 ]
 
+# Stacks con asignados (Bloque 2.3): estructura REAL de Deck →
+# assignedUsers[].participant.uid (verificada contra la fuente de nextcloud/deck,
+# lib/Db/Card.php + Assignment.php). La última entrada mezcla dos asignados.
+_STACKS_ASSIGN = [
+    {
+        "id": 5,
+        "title": "To Do",
+        "cards": [
+            {
+                "id": 100,
+                "title": "Mía",
+                "assignedUsers": [
+                    {
+                        "id": 1,
+                        "participant": {"uid": "mmazo", "primaryKey": "mmazo", "type": 0},
+                        "cardId": 100,
+                        "type": 0,
+                    }
+                ],
+            },
+            {
+                "id": 101,
+                "title": "De otro",
+                "assignedUsers": [
+                    {"id": 2, "participant": {"uid": "jdoe", "primaryKey": "jdoe"}}
+                ],
+            },
+            {"id": 102, "title": "Sin asignar", "assignedUsers": []},
+            {
+                "id": 103,
+                "title": "Compartida",
+                "assignedUsers": [
+                    {"participant": {"uid": "mmazo"}},
+                    {"participant": {"uid": "jdoe"}},
+                ],
+            },
+        ],
+    },
+    {"id": 6, "title": "Doing", "cards": []},
+]
+
 
 def _adapter(handler) -> DeckRestAdapter:
     return DeckRestAdapter(
@@ -103,6 +144,45 @@ async def test_get_board_status_unknown_board_raises():
 
     with pytest.raises(DeckError, match="tablero"):
         await _adapter(handler).get_board_status("mmazo", "NoExiste")
+
+
+@pytest.mark.asyncio
+async def test_get_board_status_filters_by_assignee():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == f"{_API}/boards":
+            return httpx.Response(200, json=_BOARDS)
+        return httpx.Response(200, json=_STACKS_ASSIGN)
+
+    status = await _adapter(handler).get_board_status(
+        "mmazo", "TECH PROY", assigned_to_uid="mmazo"
+    )
+
+    todo = status.stacks[0]
+    # Solo las asignadas a mmazo (directa o compartida); "De otro"/"Sin asignar" fuera.
+    assert [c.title for c in todo.cards] == ["Mía", "Compartida"]
+    # La compartida conserva AMBOS uids parseados de assignedUsers[].participant.uid.
+    assert set(todo.cards[1].assignees) == {"mmazo", "jdoe"}
+    # La columna sin match se conserva (estructura del tablero), pero sin tarjetas.
+    assert status.stacks[1].title == "Doing" and status.stacks[1].cards == ()
+
+
+@pytest.mark.asyncio
+async def test_get_board_status_without_filter_returns_all_cards():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == f"{_API}/boards":
+            return httpx.Response(200, json=_BOARDS)
+        return httpx.Response(200, json=_STACKS_ASSIGN)
+
+    status = await _adapter(handler).get_board_status("mmazo", "TECH PROY")
+
+    todo = status.stacks[0]
+    assert [c.title for c in todo.cards] == [
+        "Mía",
+        "De otro",
+        "Sin asignar",
+        "Compartida",
+    ]
+    assert todo.cards[2].assignees == ()  # "Sin asignar" no tiene asignados
 
 
 @pytest.mark.asyncio

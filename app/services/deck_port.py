@@ -29,12 +29,18 @@ class DeckPort(Protocol):
         """
         ...
 
-    async def get_board_status(self, uid: str, board: str | int) -> BoardStatus:
+    async def get_board_status(
+        self, uid: str, board: str | int, assigned_to_uid: str | None = None
+    ) -> BoardStatus:
         """Estado de ``board`` (columnas + tarjetas), **impersonando** a ``uid``.
 
         ``board`` puede ser el **id** numérico o el **título** (se resuelve por título
         case-insensitive contra :meth:`list_boards` si no es numérico). Lanza si el
         tablero no existe o ante fallo HTTP/transporte (la skill lo traduce a fallo).
+
+        ``assigned_to_uid`` (Bloque 2.3, refinamiento): si viene, devuelve **solo** las
+        tarjetas cuyos asignados (``Card.assignees``) contienen ese uid — p. ej. para
+        "¿qué tareas tengo?". ``None`` ⇒ todas las tarjetas del tablero.
         """
         ...
 
