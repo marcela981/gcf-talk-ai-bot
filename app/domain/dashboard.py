@@ -21,9 +21,11 @@ from typing import Any
 
 @dataclass(frozen=True)
 class DashboardTask:
-    """Tarea del dashboard. ``status`` ← ``column_status`` (enum); ``due_date`` ← ``deadline``."""
+    """Tarea del dashboard. ``id`` es **VARCHAR** en la BD (no int); ``status`` ←
+    ``column_status`` (enum ``actively-working``/``working-now``/``completed``);
+    ``due_date`` ← ``deadline``."""
 
-    id: int
+    id: str
     title: str
     status: str | None = None
     due_date: str | None = None
@@ -33,11 +35,13 @@ class DashboardTask:
 class DashboardActivity:
     """Actividad del dashboard (registro de tiempo). ``time_spent`` es su tiempo dedicado.
 
-    ``date`` ← ``start_date``; ``completed`` ← ``completed_at IS NOT NULL``; ``progress`` ←
-    ``progress``. ``activities`` no tiene columna de estado equivalente a ``column_status``.
+    ``id`` es **VARCHAR** en la BD (no int). ``date`` ← ``start_date``; ``completed`` ←
+    ``completed_at IS NOT NULL``; ``progress`` ← ``progress`` (int). ``activities`` no tiene
+    columna de estado equivalente a ``column_status``: el estado se deriva de ``completed``
+    (completada) y ``progress`` (en progreso).
     """
 
-    id: int
+    id: str
     title: str
     time_spent: float
     date: str | None = None
@@ -72,7 +76,7 @@ class HoursSummary:
 def parse_task(row: dict[str, Any]) -> DashboardTask:
     """Fila de ``tasks`` → :class:`DashboardTask` (columnas reales del esquema)."""
     return DashboardTask(
-        id=int(row["id"]),
+        id=str(row["id"]),  # id es VARCHAR — nunca int()
         title=str(row.get("title") or ""),
         status=(str(row["column_status"]) if row.get("column_status") is not None else None),
         due_date=_as_iso(row.get("deadline")),
@@ -82,9 +86,9 @@ def parse_task(row: dict[str, Any]) -> DashboardTask:
 def parse_activity(row: dict[str, Any]) -> DashboardActivity:
     """Fila de ``activities`` → :class:`DashboardActivity` (columnas reales del esquema)."""
     return DashboardActivity(
-        id=int(row["id"]),
+        id=str(row["id"]),  # id es VARCHAR — nunca int()
         title=str(row.get("title") or ""),
-        time_spent=float(row.get("time_spent") or 0),
+        time_spent=float(row.get("time_spent") or 0),  # time_spent(int); unidad TBD (D9)
         date=_as_iso(row.get("start_date")),
         completed=row.get("completed_at") is not None,
         progress=(int(row["progress"]) if row.get("progress") is not None else None),

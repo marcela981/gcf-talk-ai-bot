@@ -21,33 +21,35 @@ _USERS = [
     {"id": 7, "nc_user_id": "mmazo"},
     {"id": 8, "nc_user_id": "jdoe"},
 ]
-# Columnas REALES de `tasks`: column_status (no 'status'), deadline (no 'due_date'),
-# owner_id/assigned_to, deleted_at.
+# Columnas REALES de `tasks`: id VARCHAR (no int), column_status enum
+# ('actively-working'/'working-now'/'completed'), deadline (no 'due_date'),
+# owner_id/assigned_to(int), deleted_at (soft-delete).
 _TASKS = [
-    {"id": 1, "title": "Diseñar API", "column_status": "in_progress",
+    {"id": "tsk-1", "title": "Diseñar API", "column_status": "actively-working",
      "deadline": "2026-07-10", "owner_id": 7, "assigned_to": 7, "deleted_at": None},
     # owner distinto pero asignada a 7 ⇒ entra por assigned_to.
-    {"id": 2, "title": "Revisar PR", "column_status": "todo",
+    {"id": "tsk-2", "title": "Revisar PR", "column_status": "working-now",
      "deadline": None, "owner_id": 9, "assigned_to": 7, "deleted_at": None},
     # de jdoe (8) ⇒ NO debe verse.
-    {"id": 3, "title": "De jdoe", "column_status": "done",
+    {"id": "tsk-3", "title": "De jdoe", "column_status": "completed",
      "deadline": "2026-07-01", "owner_id": 8, "assigned_to": 8, "deleted_at": None},
     # borrada de 7 ⇒ excluida por deleted_at.
-    {"id": 4, "title": "Borrada", "column_status": "todo",
+    {"id": "tsk-4", "title": "Borrada", "column_status": "actively-working",
      "deadline": None, "owner_id": 7, "assigned_to": 7, "deleted_at": "2026-06-30 10:00:00"},
 ]
-# Columnas REALES de `activities`: time_spent, start_date, completed_at, progress.
+# Columnas REALES de `activities`: id VARCHAR, time_spent(int), start_date, completed_at,
+# progress(int). NO tiene columna de estado (se deriva de completed_at/progress).
 _ACTIVITIES = [
-    {"id": 10, "title": "Reunión", "time_spent": 1.5, "start_date": "2026-07-01",
-     "completed_at": "2026-07-01", "progress": 100, "owner_id": 7, "assigned_to": 7,
+    {"id": "act-10", "title": "Reunión", "time_spent": 2, "start_date": "2026-07-01",
+     "completed_at": "2026-07-01 09:00:00", "progress": 100, "owner_id": 7, "assigned_to": 7,
      "deleted_at": None},
-    {"id": 11, "title": "Desarrollo", "time_spent": 3.0, "start_date": "2026-07-05",
+    {"id": "act-11", "title": "Desarrollo", "time_spent": 3, "start_date": "2026-07-05",
      "completed_at": None, "progress": 40, "owner_id": 9, "assigned_to": 7,
      "deleted_at": None},
-    {"id": 12, "title": "De jdoe", "time_spent": 9.0, "start_date": "2026-07-05",
+    {"id": "act-12", "title": "De jdoe", "time_spent": 9, "start_date": "2026-07-05",
      "completed_at": None, "progress": 0, "owner_id": 8, "assigned_to": 8,
      "deleted_at": None},
-    {"id": 13, "title": "Borrada", "time_spent": 5.0, "start_date": "2026-07-05",
+    {"id": "act-13", "title": "Borrada", "time_spent": 5, "start_date": "2026-07-05",
      "completed_at": None, "progress": 0, "owner_id": 7, "assigned_to": 7,
      "deleted_at": "2026-06-20 09:00:00"},
 ]
@@ -121,12 +123,14 @@ async def test_list_tasks_filters_by_owner_or_assigned_and_excludes_deleted():
 
     tasks = await _adapter(db).list_tasks("mmazo")
 
-    # id 1 (owner=7) e id 2 (assigned_to=7); NO id 3 (jdoe) ni id 4 (borrada).
-    assert [t.id for t in tasks] == [1, 2]
-    assert 3 not in [t.id for t in tasks] and 4 not in [t.id for t in tasks]
-    # Mapeo a columnas reales: status ← column_status, due_date ← deadline.
-    diseno = next(t for t in tasks if t.id == 1)
-    assert diseno.status == "in_progress"
+    # tsk-1 (owner=7) y tsk-2 (assigned_to=7); NO tsk-3 (jdoe) ni tsk-4 (borrada).
+    ids = [t.id for t in tasks]
+    assert ids == ["tsk-1", "tsk-2"]           # id es str (VARCHAR)
+    assert all(isinstance(t.id, str) for t in tasks)
+    assert "tsk-3" not in ids and "tsk-4" not in ids
+    # Mapeo a columnas reales: status ← column_status (enum real), due_date ← deadline.
+    diseno = next(t for t in tasks if t.id == "tsk-1")
+    assert diseno.status == "actively-working"
     assert diseno.due_date == "2026-07-10"
     # Resolución primero (uid), luego datos (user_id).
     assert db.queries[0][1] == {"uid": "mmazo"}
@@ -142,8 +146,8 @@ async def test_list_activities_filters_by_identity_range_and_deleted():
         "mmazo", since="2026-07-02", until="2026-07-31"
     )
 
-    # id 10 (01-jul) fuera de rango; id 12 de jdoe; id 13 borrada ⇒ solo id 11.
-    assert [a.id for a in activities] == [11]
+    # act-10 (01-jul) fuera de rango; act-12 de jdoe; act-13 borrada ⇒ solo act-11.
+    assert [a.id for a in activities] == ["act-11"]  # id es str (VARCHAR)
     act = activities[0]
     assert act.time_spent == 3.0          # ← time_spent (no 'hours')
     assert act.date == "2026-07-05"       # ← start_date (no 'log_date')
@@ -162,7 +166,7 @@ async def test_activities_without_range_still_filters_by_identity():
     activities = await _adapter(db).list_activities("mmazo")
 
     # Ambas de mmazo (owner o assigned), no borradas; ninguna de jdoe.
-    assert [a.id for a in activities] == [10, 11]
+    assert [a.id for a in activities] == ["act-10", "act-11"]
     _assert_every_query_filters_by_identity(db.queries)
 
 

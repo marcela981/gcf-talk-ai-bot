@@ -41,7 +41,7 @@ class FakeDashboard:
 
 @pytest.mark.asyncio
 async def test_refuses_without_local_identity():
-    dash = FakeDashboard(tasks=[DashboardTask(1, "X")])
+    dash = FakeDashboard(tasks=[DashboardTask("tsk-x", "X")])
     skill = ConsultarDashboardSkill(dashboard=dash)
 
     result = await skill.execute({"recurso": "tareas"}, _GUEST)
@@ -55,8 +55,8 @@ async def test_refuses_without_local_identity():
 async def test_tareas_delegates_and_presents_real_columns():
     dash = FakeDashboard(
         tasks=[
-            DashboardTask(1, "Diseñar API", "in_progress", "2026-07-10"),
-            DashboardTask(2, "Revisar PR", "todo", None),
+            DashboardTask("tsk-1", "Diseñar API", "actively-working", "2026-07-10"),
+            DashboardTask("tsk-2", "Revisar PR", "working-now", None),
         ]
     )
     skill = ConsultarDashboardSkill(dashboard=dash)
@@ -66,10 +66,10 @@ async def test_tareas_delegates_and_presents_real_columns():
     assert result.ok
     assert result.data["recurso"] == "tareas"
     assert result.data["total"] == 2
-    # estado ← column_status, vence ← deadline.
+    # estado ← column_status (enum real), vence ← deadline.
     assert result.data["tareas"][0] == {
         "titulo": "Diseñar API",
-        "estado": "in_progress",
+        "estado": "actively-working",
         "vence": "2026-07-10",
     }
     assert dash.calls == [("list_tasks", "mmazo")]
@@ -79,8 +79,8 @@ async def test_tareas_delegates_and_presents_real_columns():
 async def test_horas_delegates_with_range_and_sums_time_spent():
     dash = FakeDashboard(
         activities=[
-            DashboardActivity(11, "Desarrollo", 3.5, "2026-07-05", False, 40),
-            DashboardActivity(12, "Reunión", 4.0, "2026-07-06", True, 100),
+            DashboardActivity("act-11", "Desarrollo", 3.5, "2026-07-05", False, 40),
+            DashboardActivity("act-12", "Reunión", 4.0, "2026-07-06", True, 100),
         ]
     )
     skill = ConsultarDashboardSkill(dashboard=dash)
@@ -105,7 +105,7 @@ async def test_horas_delegates_with_range_and_sums_time_spent():
 
 @pytest.mark.asyncio
 async def test_horas_without_range_passes_none():
-    dash = FakeDashboard(activities=[DashboardActivity(11, "Dev", 2.0, "2026-07-05")])
+    dash = FakeDashboard(activities=[DashboardActivity("act-11", "Dev", 2.0, "2026-07-05")])
     skill = ConsultarDashboardSkill(dashboard=dash)
 
     result = await skill.execute({"recurso": "horas"}, _USER)
