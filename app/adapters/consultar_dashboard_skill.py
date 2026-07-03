@@ -21,7 +21,7 @@ from typing import Any
 
 from app.adapters.dashboard_mysql_adapter import NoDashboardProfileError
 from app.domain.actor_context import ActorContext
-from app.domain.dashboard import DashboardTask, HoursSummary, TimeLog
+from app.domain.dashboard import DashboardActivity, DashboardTask, HoursSummary
 from app.domain.skill_result import SkillResult
 from app.services.dashboard_port import DashboardPort
 
@@ -137,21 +137,23 @@ class ConsultarDashboardSkill:
             return SkillResult.failure("El rango es inválido: 'hasta' es anterior a 'desde'.")
 
         try:
-            logs = await self._dashboard.list_time_logs(uid, since=since, until=until)
+            activities = await self._dashboard.list_activities(
+                uid, since=since, until=until
+            )
         except NoDashboardProfileError as exc:
             return SkillResult.failure(str(exc))
         except Exception as exc:  # noqa: BLE001 — devolver el fallo como dato (ADR-018)
             logger.exception("Consulta de horas del dashboard falló para %s.", uid)
             return SkillResult.failure(f"Error consultando el dashboard: {exc}")
 
-        summary = HoursSummary.from_logs(logs, since, until)
+        summary = HoursSummary.from_activities(activities, since, until)
         return SkillResult.success(
             {
                 "recurso": "horas",
                 "desde": summary.since,
                 "hasta": summary.until,
                 "total_horas": summary.total,
-                "registros": [_log_to_dict(log) for log in summary.entries],
+                "registros": [_activity_to_dict(a) for a in summary.activities],
             }
         )
 
@@ -164,11 +166,13 @@ def _task_to_dict(task: DashboardTask) -> dict[str, Any]:
     }
 
 
-def _log_to_dict(log: TimeLog) -> dict[str, Any]:
+def _activity_to_dict(activity: DashboardActivity) -> dict[str, Any]:
     return {
-        "fecha": log.date,
-        "horas": log.hours,
-        "descripcion": log.description,
+        "actividad": activity.title,
+        "fecha": activity.date,
+        "horas": activity.time_spent,
+        "completado": activity.completed,
+        "progreso": activity.progress,
     }
 
 

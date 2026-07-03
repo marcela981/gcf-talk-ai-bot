@@ -1,12 +1,16 @@
 """Value objects y parseo del dashboard corporativo (dominio puro, stdlib) — Bloque 3.
 
 El adapter MySQL (infra) hace el I/O contra ``dashboard_db`` y **delega aquí** la
-transformación de filas (dicts del cursor) a :class:`DashboardTask` / :class:`TimeLog`.
+transformación de filas (dicts del cursor) a :class:`DashboardTask` / :class:`DashboardActivity`.
 Mismo patrón de capas que ``domain.caldav``/``domain.deck`` (ARCHITECTURE §3): el puerto
 ``DashboardPort`` habla en estos tipos, no en filas SQL. Solo stdlib ⇒ se testea sin BD.
 
-ALCANCE (ADR-020): SOLO lectura. No hay value objects de escritura — la escritura es un
-stub comentado en el adapter y la impide el usuario de BD read-only (ADR-022).
+ESQUEMA (D9): los nombres de columna reflejan el esquema REAL (``SHOW COLUMNS``), NO nombres
+adivinados. ``tasks`` usa ``column_status``/``deadline``; ``activities`` no tiene columna de
+estado y modela el tiempo con ``time_spent`` + ``completed_at``. La UNIDAD de ``time_spent``
+está por confirmar en el smoke (se mapea tal cual a ``time_spent`` y se presenta como "horas").
+
+ALCANCE (ADR-020): SOLO lectura. No hay value objects de escritura.
 """
 from __future__ import annotations
 
@@ -17,7 +21,7 @@ from typing import Any
 
 @dataclass(frozen=True)
 class DashboardTask:
-    """Tarea del dashboard asignada al usuario. ``due_date`` es ISO (o ``None``)."""
+    """Tarea del dashboard. ``status`` ← ``column_status`` (enum); ``due_date`` ← ``deadline``."""
 
     id: int
     title: str
@@ -26,64 +30,65 @@ class DashboardTask:
 
 
 @dataclass(frozen=True)
-class TimeLog:
-    """Registro de horas del usuario. ``date`` es ISO (o ``None``); ``hours`` en horas."""
+class DashboardActivity:
+    """Actividad del dashboard (registro de tiempo). ``time_spent`` es su tiempo dedicado.
+
+    ``date`` ← ``start_date``; ``completed`` ← ``completed_at IS NOT NULL``; ``progress`` ←
+    ``progress``. ``activities`` no tiene columna de estado equivalente a ``column_status``.
+    """
 
     id: int
-    date: str | None
-    hours: float
-    description: str | None = None
-
-
-def parse_task(row: dict[str, Any]) -> DashboardTask:
-    """Fila de ``tasks`` → :class:`DashboardTask`."""
-    return DashboardTask(
-        id=int(row["id"]),
-        title=str(row.get("title") or ""),
-        status=(str(row["status"]) if row.get("status") is not None else None),
-        due_date=_as_iso(row.get("due_date")),
-    )
-
-
-def parse_time_log(row: dict[str, Any]) -> TimeLog:
-    """Fila de ``time_logs`` → :class:`TimeLog`."""
-    return TimeLog(
-        id=int(row["id"]),
-        date=_as_iso(row.get("log_date")),
-        hours=float(row.get("hours") or 0),
-        description=(row.get("description") or None),
-    )
+    title: str
+    time_spent: float
+    date: str | None = None
+    completed: bool = False
+    progress: int | None = None
 
 
 @dataclass(frozen=True)
 class HoursSummary:
-    """Resumen de horas del usuario en un rango: total + los registros que lo componen.
-
-    ``since``/``until`` son las cotas ISO consultadas (o ``None`` = sin cota). ``total`` es
-    la suma de ``hours`` de ``entries`` (redondeada). Value object de presentación que arma
-    la skill a partir de los :class:`TimeLog` que devuelve el port.
-    """
+    """Resumen de tiempo: total de ``time_spent`` + las actividades que lo componen."""
 
     since: str | None
     until: str | None
     total: float
-    entries: tuple[TimeLog, ...]
+    activities: tuple[DashboardActivity, ...]
 
     @classmethod
-    def from_logs(
-        cls, logs: list[TimeLog], since: str | None, until: str | None
+    def from_activities(
+        cls,
+        activities: list[DashboardActivity],
+        since: str | None,
+        until: str | None,
     ) -> "HoursSummary":
         return cls(
             since=since,
             until=until,
-            total=total_hours(logs),
-            entries=tuple(logs),
+            total=round(sum(a.time_spent for a in activities), 2),
+            activities=tuple(activities),
         )
 
 
-def total_hours(logs: list[TimeLog]) -> float:
-    """Suma de horas de un conjunto de registros (redondeada a 2 decimales)."""
-    return round(sum(log.hours for log in logs), 2)
+def parse_task(row: dict[str, Any]) -> DashboardTask:
+    """Fila de ``tasks`` → :class:`DashboardTask` (columnas reales del esquema)."""
+    return DashboardTask(
+        id=int(row["id"]),
+        title=str(row.get("title") or ""),
+        status=(str(row["column_status"]) if row.get("column_status") is not None else None),
+        due_date=_as_iso(row.get("deadline")),
+    )
+
+
+def parse_activity(row: dict[str, Any]) -> DashboardActivity:
+    """Fila de ``activities`` → :class:`DashboardActivity` (columnas reales del esquema)."""
+    return DashboardActivity(
+        id=int(row["id"]),
+        title=str(row.get("title") or ""),
+        time_spent=float(row.get("time_spent") or 0),
+        date=_as_iso(row.get("start_date")),
+        completed=row.get("completed_at") is not None,
+        progress=(int(row["progress"]) if row.get("progress") is not None else None),
+    )
 
 
 def _as_iso(value: Any) -> str | None:

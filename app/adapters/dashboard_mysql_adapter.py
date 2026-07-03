@@ -16,29 +16,39 @@ no se construye con el secreto en claro en logs.
 El driver MySQL (``asyncmy``) se importa **de forma perezosa** (solo si se usa el fetch
 real), igual que el RAG. ``fetch`` es inyectable para tests sin BD.
 
-NOTA (D9): los nombres de tabla/columna (``users.nc_user_id``/``users.id``, ``tasks``,
-``time_logs``) pertenecen al esquema del dashboard (otro repo/equipo, ADR-020) — **este
-adapter es la ÚNICA capa que los conoce**. Confirmar contra el esquema real; los cambios se
-absorben aquí (o vía vistas SQL estables).
+NOTA (D9): los nombres de tabla/columna (``users.nc_user_id``/``users.id``, ``tasks`` con
+``column_status``/``deadline``, ``activities`` con ``time_spent``/``start_date``) reflejan el
+esquema REAL (``SHOW COLUMNS``), NO nombres adivinados — **este adapter es la ÚNICA capa que
+los conoce**. Se confirmó contra el esquema real; los cambios se absorben aquí (o vía vistas
+SQL estables). La UNIDAD de ``time_spent`` queda por confirmar en el smoke.
 """
 from __future__ import annotations
 
 import logging
 from typing import Any, Awaitable, Callable
 
-from app.domain.dashboard import DashboardTask, TimeLog, parse_task, parse_time_log
+from app.domain.dashboard import (
+    DashboardActivity,
+    DashboardTask,
+    parse_activity,
+    parse_task,
+)
 
 logger = logging.getLogger(__name__)
 
 # Fetch inyectable: (sql, params) -> filas como dicts. Aísla el driver del test.
 FetchFn = Callable[[str, dict[str, Any]], Awaitable[list[dict[str, Any]]]]
 
-# --- SQL (D9: esquema propiedad del dashboard; identidad SIEMPRE en el WHERE) ---
+# --- SQL: columnas del esquema REAL (SHOW COLUMNS, D9), NO adivinadas -----------
+# Identidad SIEMPRE en el WHERE: (owner_id OR assigned_to) = users.id. Se excluyen los
+# borrados (deleted_at IS NULL). 'status' NO existe (tasks usa 'column_status'); 'due_date'
+# NO existe ('deadline'); NO hay tabla 'time_logs' (el tiempo vive en 'activities.time_spent').
 _SQL_RESOLVE_USER = "SELECT id FROM users WHERE nc_user_id = %(uid)s LIMIT 1"
 _SQL_TASKS = (
-    "SELECT id, title, status, due_date FROM tasks "
-    "WHERE assigned_to = %(user_id)s "
-    "ORDER BY due_date IS NULL, due_date, id"
+    "SELECT id, title, column_status, deadline FROM tasks "
+    "WHERE (owner_id = %(user_id)s OR assigned_to = %(user_id)s) "
+    "AND deleted_at IS NULL "
+    "ORDER BY deadline IS NULL, deadline, id"
 )
 
 
@@ -82,13 +92,13 @@ class DashboardMySQLAdapter:
         rows = await self._fetch(_SQL_TASKS, {"user_id": user_id})
         return [parse_task(row) for row in rows]
 
-    async def list_time_logs(
+    async def list_activities(
         self, uid: str, *, since: str | None = None, until: str | None = None
-    ) -> list[TimeLog]:
+    ) -> list[DashboardActivity]:
         user_id = await self._resolve_user_id(uid)
-        sql, params = _time_logs_query(user_id, since, until)
+        sql, params = _activities_query(user_id, since, until)
         rows = await self._fetch(sql, params)
-        return [parse_time_log(row) for row in rows]
+        return [parse_activity(row) for row in rows]
 
     # --- ESCRITURA: FUERA DE ALCANCE (ADR-020). Stubs comentados a propósito;
     #     el usuario de BD read-only (gcf_bot_ro, GRANT SELECT) la impide igual.
@@ -140,19 +150,27 @@ class DashboardMySQLAdapter:
             await conn.ensure_closed()  # asyncmy: el cierre es una corrutina
 
 
-def _time_logs_query(
+def _activities_query(
     user_id: int, since: str | None, until: str | None
 ) -> tuple[str, dict[str, Any]]:
-    """Query de ``time_logs`` SIEMPRE filtrada por identidad; fecha = filtro ADICIONAL."""
-    sql = "SELECT id, log_date, hours, description FROM time_logs WHERE user_id = %(user_id)s"
+    """Query de ``activities`` SIEMPRE filtrada por identidad + no-borradas; fecha ADICIONAL.
+
+    Rango de fechas sobre ``start_date`` (la fecha propia de la actividad); es un filtro
+    adicional que NUNCA sustituye al de identidad (owner_id/assigned_to).
+    """
+    sql = (
+        "SELECT id, title, time_spent, start_date, completed_at, progress FROM activities "
+        "WHERE (owner_id = %(user_id)s OR assigned_to = %(user_id)s) "
+        "AND deleted_at IS NULL"
+    )
     params: dict[str, Any] = {"user_id": user_id}
     if since:
-        sql += " AND log_date >= %(since)s"
+        sql += " AND start_date >= %(since)s"
         params["since"] = since
     if until:
-        sql += " AND log_date <= %(until)s"
+        sql += " AND start_date <= %(until)s"
         params["until"] = until
-    sql += " ORDER BY log_date, id"
+    sql += " ORDER BY start_date IS NULL, start_date, id"
     return sql, params
 
 

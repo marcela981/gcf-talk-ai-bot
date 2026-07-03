@@ -1,9 +1,10 @@
 """Unit tests para ConsultarDashboardSkill (lectura del dashboard, ADR-020/021/023, Bloque 3).
 
 El `DashboardPort` se reemplaza por un `FakeDashboard` — sin BD. Se verifica que la skill:
-se REHÚSA sin identidad (uid None), delega en el port para 'tareas' y 'horas' (con rango de
-fechas), suma las horas, valida el 'recurso' y las fechas, y convierte tanto un `uid` sin
-perfil como una excepción del port en `SkillResult.failure` (dato, no excepción).
+se REHÚSA sin identidad (uid None), delega en el port para 'tareas' y 'horas' (actividades,
+con rango de fechas), suma el tiempo, valida el 'recurso' y las fechas, y convierte tanto un
+`uid` sin perfil como una excepción del port en `SkillResult.failure` (dato, no excepción).
+Las aserciones usan las columnas del ESQUEMA REAL (estado←column_status, horas←time_spent…).
 """
 from __future__ import annotations
 
@@ -12,16 +13,16 @@ import pytest
 from app.adapters.consultar_dashboard_skill import ConsultarDashboardSkill
 from app.adapters.dashboard_mysql_adapter import DashboardError, NoDashboardProfileError
 from app.domain.actor_context import ActorContext
-from app.domain.dashboard import DashboardTask, TimeLog
+from app.domain.dashboard import DashboardActivity, DashboardTask
 
 _USER = ActorContext(actor_id="users/mmazo", token="room1", impersonated_uid="mmazo")
 _GUEST = ActorContext(actor_id="guests/abc", token="room1", impersonated_uid=None)
 
 
 class FakeDashboard:
-    def __init__(self, tasks=(), logs=(), error: Exception | None = None) -> None:
+    def __init__(self, tasks=(), activities=(), error: Exception | None = None) -> None:
         self._tasks = list(tasks)
-        self._logs = list(logs)
+        self._activities = list(activities)
         self._error = error
         self.calls: list[tuple] = []
 
@@ -31,11 +32,11 @@ class FakeDashboard:
             raise self._error
         return list(self._tasks)
 
-    async def list_time_logs(self, uid, *, since=None, until=None):
-        self.calls.append(("list_time_logs", uid, since, until))
+    async def list_activities(self, uid, *, since=None, until=None):
+        self.calls.append(("list_activities", uid, since, until))
         if self._error:
             raise self._error
-        return list(self._logs)
+        return list(self._activities)
 
 
 @pytest.mark.asyncio
@@ -51,11 +52,11 @@ async def test_refuses_without_local_identity():
 
 
 @pytest.mark.asyncio
-async def test_tareas_delegates_and_presents():
+async def test_tareas_delegates_and_presents_real_columns():
     dash = FakeDashboard(
         tasks=[
-            DashboardTask(1, "Diseñar API", "open", "2026-07-10"),
-            DashboardTask(2, "Revisar PR", "done", None),
+            DashboardTask(1, "Diseñar API", "in_progress", "2026-07-10"),
+            DashboardTask(2, "Revisar PR", "todo", None),
         ]
     )
     skill = ConsultarDashboardSkill(dashboard=dash)
@@ -65,20 +66,21 @@ async def test_tareas_delegates_and_presents():
     assert result.ok
     assert result.data["recurso"] == "tareas"
     assert result.data["total"] == 2
+    # estado ← column_status, vence ← deadline.
     assert result.data["tareas"][0] == {
         "titulo": "Diseñar API",
-        "estado": "open",
+        "estado": "in_progress",
         "vence": "2026-07-10",
     }
     assert dash.calls == [("list_tasks", "mmazo")]
 
 
 @pytest.mark.asyncio
-async def test_horas_delegates_with_range_and_sums():
+async def test_horas_delegates_with_range_and_sums_time_spent():
     dash = FakeDashboard(
-        logs=[
-            TimeLog(11, "2026-07-05", 3.5, None),
-            TimeLog(12, "2026-07-06", 4.0, "cliente"),
+        activities=[
+            DashboardActivity(11, "Desarrollo", 3.5, "2026-07-05", False, 40),
+            DashboardActivity(12, "Reunión", 4.0, "2026-07-06", True, 100),
         ]
     )
     skill = ConsultarDashboardSkill(dashboard=dash)
@@ -90,21 +92,27 @@ async def test_horas_delegates_with_range_and_sums():
     assert result.ok
     assert result.data["recurso"] == "horas"
     assert result.data["desde"] == "2026-07-01" and result.data["hasta"] == "2026-07-31"
-    assert result.data["total_horas"] == 7.5
-    assert len(result.data["registros"]) == 2
-    assert dash.calls == [("list_time_logs", "mmazo", "2026-07-01", "2026-07-31")]
+    assert result.data["total_horas"] == 7.5  # suma de time_spent
+    assert result.data["registros"][0] == {
+        "actividad": "Desarrollo",
+        "fecha": "2026-07-05",
+        "horas": 3.5,
+        "completado": False,
+        "progreso": 40,
+    }
+    assert dash.calls == [("list_activities", "mmazo", "2026-07-01", "2026-07-31")]
 
 
 @pytest.mark.asyncio
 async def test_horas_without_range_passes_none():
-    dash = FakeDashboard(logs=[TimeLog(11, "2026-07-05", 2.0, None)])
+    dash = FakeDashboard(activities=[DashboardActivity(11, "Dev", 2.0, "2026-07-05")])
     skill = ConsultarDashboardSkill(dashboard=dash)
 
     result = await skill.execute({"recurso": "horas"}, _USER)
 
     assert result.ok
     assert result.data["total_horas"] == 2.0
-    assert dash.calls == [("list_time_logs", "mmazo", None, None)]
+    assert dash.calls == [("list_activities", "mmazo", None, None)]
 
 
 @pytest.mark.asyncio

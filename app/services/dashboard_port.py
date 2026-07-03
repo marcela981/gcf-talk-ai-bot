@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-from app.domain.dashboard import DashboardTask, TimeLog
+from app.domain.dashboard import DashboardActivity, DashboardTask
 
 
 @runtime_checkable
@@ -28,22 +28,24 @@ class DashboardPort(Protocol):
     """Acceso de solo-lectura a los datos del dashboard de un usuario, bajo SU identidad."""
 
     async def list_tasks(self, uid: str) -> list[DashboardTask]:
-        """Tareas asignadas al usuario ``uid`` en el dashboard, filtradas por su identidad.
+        """Tareas del usuario ``uid`` en el dashboard, filtradas por su identidad.
 
-        Resuelve ``uid`` → ``users.id`` y filtra ``tasks`` por ese id. Lanza un error del
-        adapter si ``uid`` no tiene perfil en el dashboard o ante fallo de conexión/consulta
-        (la skill lo traduce a ``SkillResult.failure``). **Nunca** devuelve datos de terceros.
+        Resuelve ``uid`` → ``users.id`` y filtra ``tasks`` por ese id (``owner_id`` o
+        ``assigned_to``), excluyendo las eliminadas. Lanza un error del adapter si ``uid`` no
+        tiene perfil en el dashboard o ante fallo de conexión/consulta (la skill lo traduce a
+        ``SkillResult.failure``). **Nunca** devuelve datos de terceros.
         """
         ...
 
-    async def list_time_logs(
+    async def list_activities(
         self, uid: str, *, since: str | None = None, until: str | None = None
-    ) -> list[TimeLog]:
-        """Registros de horas del usuario ``uid``, opcionalmente acotados por rango de fechas.
+    ) -> list[DashboardActivity]:
+        """Actividades (registros de tiempo) del usuario ``uid``, acotables por rango de fechas.
 
-        ``since``/``until`` son fechas ISO ``YYYY-MM-DD`` inclusivas (o ``None`` = sin cota).
-        Siempre filtra por la identidad resuelta (``user_id = users.id``); el rango de fechas
-        es un filtro **adicional**, nunca sustituye al de identidad. Mismo contrato de errores
-        que :meth:`list_tasks`.
+        ``since``/``until`` son fechas ISO ``YYYY-MM-DD`` inclusivas (o ``None`` = sin cota),
+        aplicadas sobre ``start_date``. Siempre filtra por la identidad resuelta (``owner_id``
+        o ``assigned_to`` = ``users.id``) y excluye eliminadas; el rango de fechas es un filtro
+        **adicional**, nunca sustituye al de identidad. Mismo contrato de errores que
+        :meth:`list_tasks`.
         """
         ...
